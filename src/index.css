@@ -259,3 +259,53 @@ textarea { resize: vertical; min-height: 90px; }
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-up { animation: fadeUp 250ms ease both; }
+
+/* --- Bigger gallery on large screens --- */
+.ba-gallery {
+  /* wider than your default container, but still centered */
+  max-width: min(1280px, 95vw);
+  margin: 16px auto 0;
+  padding: 0 var(--space-5);
+}
+
+/* Make cards bigger by default */
+.grid--cards {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* On larger screens, lock to 2 generous columns and increase gaps */
+@media (min-width: 900px) {
+  .grid--cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-6);
+  }
+  .ba-card { box-shadow: var(--shadow-md); }
+}
+
+/* Slightly taller visuals without cropping content */
+.ba-media {
+  aspect-ratio: 16 / 9;     /* change to 4 / 3 if you want taller cards */
+}
+.ba-media img {
+  object-fit: cover;       /* use 'cover' for edge-to-edge (may crop) */
+}
+
+/* Uniform square cards, fill image */
+.ba-media { aspect-ratio: 1 / 1; }        /* square frame for every card */
+.ba-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;                       /* fill the box (may crop edges) */
+  object-position: center;
+}
+
+/* Optional per-image nudges */
+.ba-media.pos-top img { object-position: top center; }
+.ba-media.pos-bottom img { object-position: bottom center; }
+.ba-media.pos-left img { object-position: left center; }
+.ba-media.pos-right img { object-position: right center; }
+
+
+
+
+
