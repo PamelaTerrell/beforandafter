@@ -1,5 +1,6 @@
 import NavBar from './NavBar';
 import { Analytics } from '@vercel/analytics/react';
+import Footer from './Footer';
 
 export default function PageLayout({ title, subtitle, children }) {
   return (
@@ -13,6 +14,7 @@ export default function PageLayout({ title, subtitle, children }) {
         {children}
         <Analytics />
       </main>
+      <Footer />
     </>
   );
 }
