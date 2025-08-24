@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import PageLayout from '../components/PageLayout';
 
 export default function Login() {
   const nav = useNavigate();
@@ -47,9 +48,7 @@ export default function Login() {
 
         if (!data.session) {
           // Most likely because "Confirm email" is ON in Supabase
-          setNotice(
-            'Account created. Please check your email to confirm before logging in.'
-          );
+          setNotice('Account created. Please check your email to confirm before logging in.');
         } else {
           setNotice('Account created and signed in.');
         }
@@ -83,12 +82,8 @@ export default function Login() {
   }
 
   return (
-
-    
-    <div className="container" style={{ maxWidth: 520 }}>
-      <h2>{mode === 'signin' ? 'Log in' : 'Create account'}</h2>
-
-      <form onSubmit={handleSubmit} className="card">
+    <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
+      <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
         <label htmlFor="email">Email</label>
         <input
           id="email"
@@ -112,8 +107,8 @@ export default function Login() {
           minLength={6}
         />
 
-        {err && <p style={{ color: 'crimson', marginTop: 8 }}>{err}</p>}
-        {notice && <p style={{ color: 'seagreen', marginTop: 8 }}>{notice}</p>}
+        {err && <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">{err}</p>}
+        {notice && <p style={{ color: 'seagreen', marginTop: 8 }} aria-live="polite">{notice}</p>}
 
         {mode === 'signup' && (
           <button
@@ -127,7 +122,7 @@ export default function Login() {
         )}
 
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="button" type="submit" disabled={loading}>
+          <button className="button primary" type="submit" disabled={loading}>
             {loading ? 'Please wait…' : mode === 'signin' ? 'Log in' : 'Sign up'}
           </button>
           <button
@@ -138,9 +133,7 @@ export default function Login() {
             {mode === 'signin' ? 'Create account' : 'Have an account? Log in'}
           </button>
         </div>
-
-        
       </form>
-    </div>
+    </PageLayout>
   );
 }
