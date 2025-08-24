@@ -352,6 +352,21 @@ textarea { resize: vertical; min-height: 90px; }
   }
 }
 
+/* --- CTA block under gallery --- */
+.ba-cta h2 { margin: 0 0 var(--space-3); }
+.ba-cta p  { margin: 0 0 var(--space-3); }
+.ba-cta-list {
+  margin: 0 0 var(--space-4);
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+.ba-cta-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+
 
 
 
