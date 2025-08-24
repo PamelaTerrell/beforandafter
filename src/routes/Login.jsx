@@ -83,6 +83,8 @@ export default function Login() {
   }
 
   return (
+
+    
     <div className="container" style={{ maxWidth: 520 }}>
       <h2>{mode === 'signin' ? 'Log in' : 'Create account'}</h2>
 
@@ -137,9 +139,7 @@ export default function Login() {
           </button>
         </div>
 
-        <small style={{ display: 'block', marginTop: 8, color: '#666' }}>
-          Supabase → Authentication → URL Configuration → Site URL should be {window.location.origin}.
-        </small>
+        
       </form>
     </div>
   );
