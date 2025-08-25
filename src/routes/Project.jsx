@@ -27,6 +27,7 @@ function ProjectInner() {
   const [fileErr, setFileErr] = useState(null);
 
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [signedUrls, setSignedUrls] = useState({}); // { entryId: url }
 
   // Load project + entries
@@ -143,6 +144,43 @@ function ProjectInner() {
     }
   }
 
+  async function deleteEntry(en) {
+    if (!confirm('Delete this entry?')) return;
+
+    try {
+      setDeletingId(en.id);
+
+      // 1) Delete the file (if any)
+      if (en.media_path) {
+        const { error: rmErr } = await supabase
+          .storage
+          .from(MEDIA_BUCKET)
+          .remove([en.media_path]);
+        if (rmErr) throw rmErr;
+      }
+
+      // 2) Delete the row
+      const { error } = await supabase
+        .from('entries')
+        .delete()
+        .eq('id', en.id);
+      if (error) throw error;
+
+      // 3) Update UI
+      setEntries(prev => prev.filter(x => x.id !== en.id));
+      setSignedUrls(prev => {
+        const next = { ...prev };
+        delete next[en.id];
+        return next;
+      });
+    } catch (err) {
+      alert(err?.message || 'Could not delete entry');
+      console.error(err);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <PageLayout
       title={project ? project.title : 'Project'}
@@ -201,9 +239,22 @@ function ProjectInner() {
           <div className="grid" style={{ marginTop: 16, gap: '16px' }}>
             {entries.map(en => (
               <div className="card" key={en.id}>
-                <b>{en.kind.toUpperCase()}</b>
-                {' '}·{' '}
-                <small>{new Date(en.taken_at).toLocaleString()}</small>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div>
+                    <b>{en.kind.toUpperCase()}</b>
+                    {' '}·{' '}
+                    <small>{new Date(en.taken_at).toLocaleString()}</small>
+                  </div>
+                  <button
+                    className="button ghost"
+                    onClick={() => deleteEntry(en)}
+                    disabled={deletingId === en.id}
+                    aria-label="Delete entry"
+                  >
+                    {deletingId === en.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
+
                 {en.note && <p style={{ marginTop: 8 }}>{en.note}</p>}
 
                 {en.media_path && signedUrls[en.id] && (
