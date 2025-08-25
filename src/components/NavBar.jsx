@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
@@ -6,6 +6,7 @@ export default function NavBar() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const nav = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     // Initial session
@@ -26,15 +27,35 @@ export default function NavBar() {
     nav('/login');
   }
 
+  // Helper for consistent active styling on NavLink
+  const linkClass = ({ isActive }) => 'navlink' + (isActive ? ' active' : '');
+
+  // Consider "/s/:slug" as part of the Community section
+  const communityIsActive =
+    location.pathname === '/community' || location.pathname.startsWith('/s/');
+
   return (
     <header className="navbar">
       <div className="navbar__inner container">
         <div className="nav-left">
           <NavLink to="/" className="brand">Before &amp; After Vault</NavLink>
-          <NavLink to="/projects" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+
+          <NavLink
+            to="/projects"
+            className={linkClass}
+          >
             Projects
           </NavLink>
+
+          {/* New: Community gallery link (also active on /s/:slug) */}
+          <NavLink
+            to="/community"
+            className={'navlink' + (communityIsActive ? ' active' : '')}
+          >
+            Community
+          </NavLink>
         </div>
+
         <div className="nav-right">
           {authReady && (session ? (
             <>

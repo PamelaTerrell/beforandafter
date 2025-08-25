@@ -4,6 +4,9 @@ import Guard from '../components/Guard';
 import PageLayout from '../components/PageLayout';
 import { supabase } from '../lib/supabase';
 
+
+
+
 export default function Projects() {
   return (
     <Guard>

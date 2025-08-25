@@ -4,7 +4,18 @@ import Guard from '../components/Guard';
 import PageLayout from '../components/PageLayout';
 import { supabase } from '../lib/supabase';
 
-const MEDIA_BUCKET = 'media'; // <-- match your bucket name exactly
+const MEDIA_BUCKET = 'media';         // private bucket (already set up)
+const COMMUNITY_BUCKET = 'community'; // public bucket (you created)
+
+// One slug helper (removed the duplicate)
+function toSlug(s) {
+  const base = (s || 'share')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const rand = Math.random().toString(36).slice(2, 7); // short random suffix
+  return `${base}-${rand}`;
+}
 
 export default function Project() {
   return (
@@ -14,11 +25,7 @@ export default function Project() {
   );
 }
 
-/** Downscale + recompress an image File to reduce size aggressively.
- *  - Resizes to maxWidth/maxHeight (never upscales)
- *  - Tries WebP first, then JPEG fallback
- *  - Iteratively lowers quality until under targetBytes (or floorQuality)
- */
+/** Downscale + recompress an image File to reduce size aggressively. */
 async function downscaleImage(
   file,
   {
@@ -27,13 +34,11 @@ async function downscaleImage(
     startQuality = 0.82,
     floorQuality = 0.55,
     targetBytes = 150 * 1024, // ≈150 KB
-    preferFormat = 'image/webp', // try WebP first
+    preferFormat = 'image/webp',
   } = {}
 ) {
-  // If already small on disk, keep as-is
   if (file.size <= targetBytes) return file;
 
-  // Decode image -> bitmap or <img>
   let bitmap = null;
   try {
     if ('createImageBitmap' in window) {
@@ -55,7 +60,6 @@ async function downscaleImage(
 
   const srcW = bitmap ? bitmap.width : imgEl.naturalWidth;
   const srcH = bitmap ? bitmap.height : imgEl.naturalHeight;
-
   const scale = Math.min(maxWidth / srcW, maxHeight / srcH, 1);
   const dstW = Math.max(1, Math.round(srcW * scale));
   const dstH = Math.max(1, Math.round(srcH * scale));
@@ -64,9 +68,8 @@ async function downscaleImage(
   canvas.width = dstW;
   canvas.height = dstH;
   const ctx = canvas.getContext('2d');
-  if (bitmap) {
-    ctx.drawImage(bitmap, 0, 0, dstW, dstH);
-  } else {
+  if (bitmap) ctx.drawImage(bitmap, 0, 0, dstW, dstH);
+  else {
     ctx.drawImage(imgEl, 0, 0, dstW, dstH);
     URL.revokeObjectURL(imgEl.src);
   }
@@ -76,19 +79,16 @@ async function downscaleImage(
     return blob;
   }
 
-  // Try WebP first
   let format = preferFormat;
   let q = startQuality;
   let blob = await encode(format, q);
 
-  // Some browsers may not support WebP export; fallback immediately
   if (!blob || blob.size === 0 || !blob.type.includes('image')) {
     format = 'image/jpeg';
     q = startQuality;
     blob = await encode(format, q);
   }
 
-  // Iteratively lower quality until under targetBytes or floorQuality reached
   while (blob && blob.size > targetBytes && q > floorQuality) {
     q = Math.max(floorQuality, q - 0.1);
     const next = await encode(format, q);
@@ -96,7 +96,7 @@ async function downscaleImage(
     blob = next;
   }
 
-  if (!blob) return file; // fallback to original if something went wrong
+  if (!blob) return file;
 
   const ext = format.includes('webp') ? 'webp' : 'jpg';
   const newName = file.name.replace(/\.\w+$/, '') + '.' + ext;
@@ -117,6 +117,7 @@ function ProjectInner() {
 
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [sharingId, setSharingId] = useState(null);
   const [signedUrls, setSignedUrls] = useState({}); // { entryId: url }
 
   // Load project + entries
@@ -176,7 +177,6 @@ function ProjectInner() {
     }
 
     try {
-      // Aggressive compression: 600px box, target ≈150KB
       const small = await downscaleImage(f, {
         maxWidth: 600,
         maxHeight: 600,
@@ -189,7 +189,6 @@ function ProjectInner() {
       setPreviewUrl(URL.createObjectURL(small));
     } catch (err) {
       console.error(err);
-      // Fallback to original
       setFile(f);
       setPreviewUrl(URL.createObjectURL(f));
     }
@@ -289,6 +288,79 @@ function ProjectInner() {
     }
   }
 
+  async function shareEntry(en) {
+    try {
+      setSharingId(en.id);
+
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) throw new Error('Not signed in');
+      if (!en.media_path) throw new Error('This entry has no photo to share');
+
+      const caption = window.prompt('Add a caption (optional):') || null;
+
+      // 1) Signed URL for private image (short-lived)
+      const { data: sig, error: sigErr } = await supabase
+        .storage
+        .from(MEDIA_BUCKET)
+        .createSignedUrl(en.media_path, 60);
+      if (sigErr || !sig?.signedUrl) throw sigErr || new Error('Could not sign URL');
+
+      // 2) Download blob
+      const resp = await fetch(sig.signedUrl);
+      if (!resp.ok) throw new Error('Failed to fetch private image');
+      const blob = await resp.blob();
+
+      // 3) Upload to public community bucket
+      const ext = blob.type.includes('webp') ? 'webp'
+                : blob.type.includes('png')  ? 'png'
+                : 'jpg';
+      const public_path = `${userId}/${en.id}/${crypto.randomUUID()}.${ext}`;
+
+      const { error: upErr } = await supabase
+        .storage
+        .from(COMMUNITY_BUCKET)
+        .upload(public_path, blob, { contentType: blob.type, upsert: false });
+      if (upErr) throw upErr;
+
+      // 4) Create slug & insert share row (retry once if slug collides)
+      const baseForSlug =
+        (project?.title ? `${project.title}-${en.kind}` : en.kind) || 'share';
+      let slug = toSlug(baseForSlug);
+
+      const insertShare = async (sl) =>
+        supabase.from('shares').insert({
+          user_id: userId,
+          caption,
+          media_path: public_path, // path within COMMUNITY bucket
+          slug: sl,
+          is_public: true
+        });
+
+      let { error: rowErr } = await insertShare(slug);
+      if (rowErr && rowErr.code === '23505') {
+        // unique violation on slug — try once more with a fresh slug
+        slug = toSlug(`${baseForSlug}-alt`);
+        ({ error: rowErr } = await insertShare(slug));
+      }
+      if (rowErr) throw rowErr;
+
+      // 5) Build the pretty page URL and copy it
+      const pageUrl = `${window.location.origin}/s/${slug}`;
+      try {
+        await navigator.clipboard.writeText(pageUrl);
+        alert(`Shared! Link copied to clipboard:\n${pageUrl}`);
+      } catch {
+        alert(`Shared! Public page:\n${pageUrl}`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || 'Could not share this entry');
+    } finally {
+      setSharingId(null);
+    }
+  }
+
   return (
     <PageLayout
       title={project ? project.title : 'Project'}
@@ -311,7 +383,7 @@ function ProjectInner() {
             <label>Note</label>
             <textarea
               className="input"
-              rows="3"
+              rows={3}
               placeholder="What changed?"
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -353,14 +425,23 @@ function ProjectInner() {
                     {' '}·{' '}
                     <small>{new Date(en.taken_at).toLocaleString()}</small>
                   </div>
-                  <button
-                    className="button ghost"
-                    onClick={() => deleteEntry(en)}
-                    disabled={deletingId === en.id}
-                    aria-label="Delete entry"
-                  >
-                    {deletingId === en.id ? 'Deleting…' : 'Delete'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="button ghost"
+                      onClick={() => shareEntry(en)}
+                      disabled={sharingId === en.id}
+                    >
+                      {sharingId === en.id ? 'Sharing…' : 'Share'}
+                    </button>
+                    <button
+                      className="button ghost"
+                      onClick={() => deleteEntry(en)}
+                      disabled={deletingId === en.id}
+                      aria-label="Delete entry"
+                    >
+                      {deletingId === en.id ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
                 </div>
 
                 {en.note && <p style={{ marginTop: 8 }}>{en.note}</p>}
