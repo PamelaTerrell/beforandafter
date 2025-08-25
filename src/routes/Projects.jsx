@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Guard from '../components/Guard';
-import NavBar from '../components/NavBar';
+import PageLayout from '../components/PageLayout';
 import { supabase } from '../lib/supabase';
 
 export default function Projects() {
   return (
-    <>
-      <NavBar />
-      <Guard>
-        <ProjectsInner />
-      </Guard>
-    </>
+    <Guard>
+      <ProjectsInner />
+    </Guard>
   );
 }
 
@@ -33,9 +30,11 @@ function ProjectsInner() {
   async function createProject(e) {
     e.preventDefault();
     const { data: user } = await supabase.auth.getUser();
-    const { data, error } = await supabase.from('projects')
+    const { data, error } = await supabase
+      .from('projects')
       .insert({ owner_id: user.user.id, title, category })
-      .select().single();
+      .select()
+      .single();
     if (!error) {
       setList(prev => [data, ...prev]);
       setTitle('');
@@ -44,8 +43,7 @@ function ProjectsInner() {
   }
 
   return (
-    <div className="container">
-      <h2>Your Projects</h2>
+    <PageLayout title="Projects">
       <form onSubmit={createProject} className="card">
         <label>Title</label>
         <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} required />
@@ -59,15 +57,17 @@ function ProjectsInner() {
             <option value="other">Other</option>
           </select>
         </div>
-        <button className="button" type="submit">Create</button>
+        <button className="button primary" type="submit">Create</button>
       </form>
 
-      {list.map(p => (
-        <div className="card" key={p.id}>
-          <b>{p.title}</b> <small>· {p.category}</small><br />
-          <Link to={`/projects/${p.id}`}>Open</Link>
-        </div>
-      ))}
-    </div>
+      <div className="grid grid--cards" style={{ marginTop: 16 }}>
+        {list.map(p => (
+          <div className="card" key={p.id}>
+            <b>{p.title}</b> <small>· {p.category}</small><br />
+            <Link to={`/projects/${p.id}`} className="navlink" style={{ padding: 0 }}>Open</Link>
+          </div>
+        ))}
+      </div>
+    </PageLayout>
   );
 }
