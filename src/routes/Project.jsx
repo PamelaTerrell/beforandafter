@@ -14,6 +14,95 @@ export default function Project() {
   );
 }
 
+/** Downscale + recompress an image File to reduce size aggressively.
+ *  - Resizes to maxWidth/maxHeight (never upscales)
+ *  - Tries WebP first, then JPEG fallback
+ *  - Iteratively lowers quality until under targetBytes (or floorQuality)
+ */
+async function downscaleImage(
+  file,
+  {
+    maxWidth = 600,
+    maxHeight = 600,
+    startQuality = 0.82,
+    floorQuality = 0.55,
+    targetBytes = 150 * 1024, // ≈150 KB
+    preferFormat = 'image/webp', // try WebP first
+  } = {}
+) {
+  // If already small on disk, keep as-is
+  if (file.size <= targetBytes) return file;
+
+  // Decode image -> bitmap or <img>
+  let bitmap = null;
+  try {
+    if ('createImageBitmap' in window) {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    }
+  } catch {
+    bitmap = null;
+  }
+
+  let imgEl = null;
+  if (!bitmap) {
+    imgEl = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  const srcW = bitmap ? bitmap.width : imgEl.naturalWidth;
+  const srcH = bitmap ? bitmap.height : imgEl.naturalHeight;
+
+  const scale = Math.min(maxWidth / srcW, maxHeight / srcH, 1);
+  const dstW = Math.max(1, Math.round(srcW * scale));
+  const dstH = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = dstW;
+  canvas.height = dstH;
+  const ctx = canvas.getContext('2d');
+  if (bitmap) {
+    ctx.drawImage(bitmap, 0, 0, dstW, dstH);
+  } else {
+    ctx.drawImage(imgEl, 0, 0, dstW, dstH);
+    URL.revokeObjectURL(imgEl.src);
+  }
+
+  async function encode(format, quality) {
+    const blob = await new Promise((res) => canvas.toBlob(res, format, quality));
+    return blob;
+  }
+
+  // Try WebP first
+  let format = preferFormat;
+  let q = startQuality;
+  let blob = await encode(format, q);
+
+  // Some browsers may not support WebP export; fallback immediately
+  if (!blob || blob.size === 0 || !blob.type.includes('image')) {
+    format = 'image/jpeg';
+    q = startQuality;
+    blob = await encode(format, q);
+  }
+
+  // Iteratively lower quality until under targetBytes or floorQuality reached
+  while (blob && blob.size > targetBytes && q > floorQuality) {
+    q = Math.max(floorQuality, q - 0.1);
+    const next = await encode(format, q);
+    if (!next) break;
+    blob = next;
+  }
+
+  if (!blob) return file; // fallback to original if something went wrong
+
+  const ext = format.includes('webp') ? 'webp' : 'jpg';
+  const newName = file.name.replace(/\.\w+$/, '') + '.' + ext;
+  return new File([blob], newName, { type: blob.type, lastModified: Date.now() });
+}
+
 function ProjectInner() {
   const { id } = useParams();
   const [project, setProject] = useState(null);
@@ -63,15 +152,14 @@ function ProjectInner() {
     })();
   }, [entries]);
 
-  // File select/preview + validation
-  function onPickFile(e) {
+  // File select/preview + validation + DOWNSCALE
+  async function onPickFile(e) {
     const f = e.target.files?.[0] ?? null;
     setFileErr(null);
-    setPreviewUrl(prev => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
     if (!f) {
       setFile(null);
       return;
@@ -81,13 +169,30 @@ function ProjectInner() {
       setFile(null);
       return;
     }
-    if (f.size > 10 * 1024 * 1024) {
-      setFileErr('Image is larger than 10MB. Please pick a smaller file.');
+    if (f.size > 25 * 1024 * 1024) {
+      setFileErr('Image is larger than 25MB. Please pick a smaller file.');
       setFile(null);
       return;
     }
-    setFile(f);
-    setPreviewUrl(URL.createObjectURL(f));
+
+    try {
+      // Aggressive compression: 600px box, target ≈150KB
+      const small = await downscaleImage(f, {
+        maxWidth: 600,
+        maxHeight: 600,
+        startQuality: 0.8,
+        floorQuality: 0.55,
+        targetBytes: 150 * 1024,
+        preferFormat: 'image/webp',
+      });
+      setFile(small);
+      setPreviewUrl(URL.createObjectURL(small));
+    } catch (err) {
+      console.error(err);
+      // Fallback to original
+      setFile(f);
+      setPreviewUrl(URL.createObjectURL(f));
+    }
   }
 
   // Cleanup preview URL
@@ -120,9 +225,12 @@ function ProjectInner() {
       }
 
       // Insert entry row
+      const payload = { project_id: id, kind, note };
+      if (media_path) payload.media_path = media_path;
+
       const { data, error } = await supabase
         .from('entries')
-        .insert({ project_id: id, kind, note, media_path })
+        .insert(payload)
         .select()
         .single();
       if (error) throw error;
@@ -222,11 +330,11 @@ function ProjectInner() {
                 <img
                   src={previewUrl}
                   alt="Selected preview"
-                  style={{ width: '100%', borderRadius: 10 }}
+                  style={{ width: '100%', borderRadius: 10, maxWidth: 480, marginInline: 'auto' }}
                 />
               </div>
             )}
-            <small>Tip: keep images &lt; 10MB for quicker uploads.</small>
+            <small>Images are optimized on upload (~600px, ~≤150KB).</small>
 
             <div style={{ marginTop: 12 }}>
               <button className="button primary" type="submit" disabled={uploading}>
@@ -262,7 +370,7 @@ function ProjectInner() {
                     <img
                       src={signedUrls[en.id]}
                       alt={`${en.kind} entry`}
-                      style={{ width: '100%', borderRadius: 10 }}
+                      style={{ width: '100%', borderRadius: 10, maxWidth: 480, marginInline: 'auto' }}
                       loading="lazy"
                       decoding="async"
                     />
