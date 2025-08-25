@@ -7,12 +7,20 @@
   --muted: #64748b;       /* secondary text */
   --border: #e2e8f0;      /* subtle borders */
   --accent: #0b57d0;      /* action/links */
-  --accent-ink: #c4d1ee;  /* text on accent (off-white) */
+  --accent-ink: #ffffff;  /* text on accent (strong contrast) */
   --accent-soft: #e9effe; /* hover/soft fills */
+
+  --edge-pad-mobile: 32px;
+  --nav-h: 56px;          /* used by mobile sheet offset */
 
   /* Button label tones (these drive .button colors) */
   --btn-ink-filled: #bad0ef;  /* off-white (reads darker than pure white) */
   --btn-ink-ghost:  #0b1220;  /* deep slate for ghost buttons */
+
+  /* Danger tokens */
+  --danger: #dc2626;
+  --danger-ink: #ffffff;
+  --danger-hover: #b91c1c;
 
   /* Shadows / Radii */
   --radius: 12px;
@@ -51,8 +59,13 @@
     --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.45);
 
     /* Button ink in dark mode */
-    --btn-ink-filled: #154085;  /* still light, a hair darker than white */
-    --btn-ink-ghost:  #e6edf7;  /* light ink for ghost buttons on dark panels */
+    --btn-ink-filled: #154085;
+    --btn-ink-ghost:  #e6edf7;
+
+    /* Danger in dark mode */
+    --danger: #ef4444;
+    --danger-ink: #0b1220;
+    --danger-hover: #f87171;
   }
 }
 
@@ -105,6 +118,7 @@ main { padding: var(--space-8) 0; }
   position: sticky;
   top: 0;
   z-index: 50;
+  background: var(--panel); /* fallback for browsers without color-mix */
   background: color-mix(in oklab, var(--panel) 92%, transparent);
   backdrop-filter: saturate(1.2) blur(6px);
   border-bottom: 1px solid var(--border);
@@ -136,7 +150,18 @@ main { padding: var(--space-8) 0; }
 /* Support your old .nav class if still present somewhere */
 .nav { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
 
-/* ========== Headings ========== */
+/* Muted email in navbar */
+.nav-email { color: var(--muted); font-size: var(--fs-sm); }
+
+/* Desktop nav row spacing (links and auth controls) */
+.nav-desktop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4); /* 16px; bump to var(--space-6) if you want more */
+}
+
+
+/* ========== Headings & Page Header ========== */
 h1 {
   font-size: clamp(1.75rem, 1.2rem + 2.2vw, 2.5rem);
   line-height: 1.15;
@@ -146,6 +171,16 @@ h1 {
 h2 { font-size: var(--fs-2xl); margin: var(--space-6) 0 var(--space-3); }
 h3 { font-size: var(--fs-xl); margin: var(--space-5) 0 var(--space-2); }
 small { color: var(--muted); font-size: var(--fs-sm); }
+
+.page-header {
+  margin: var(--space-6) 0 var(--space-4);
+  display: block;
+}
+.page-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+}
 
 /* ========== Cards ========== */
 .card {
@@ -157,6 +192,7 @@ small { color: var(--muted); font-size: var(--fs-sm); }
   transition: box-shadow 180ms ease, transform 180ms ease;
 }
 .card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.card + .card { margin-top: var(--space-4); }
 
 /* ========== Forms & Inputs ========== */
 label { font-weight: 600; font-size: var(--fs-sm); color: var(--muted); }
@@ -199,8 +235,8 @@ textarea { resize: vertical; min-height: 90px; }
   border-radius: 10px;
   border: 1px solid transparent;
   background: var(--text);             /* dark fill by default */
-  color: var(--btn-ink-filled);        /* <-- darker off-white label */
-  font-weight: 700;                    /* a bit weightier for readability */
+  color: var(--btn-ink-filled);        /* darker off-white label */
+  font-weight: 700;
   letter-spacing: 0.01em;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 180ms ease, background 120ms ease, border-color 120ms ease;
@@ -212,14 +248,14 @@ textarea { resize: vertical; min-height: 90px; }
 
 .button.ghost {
   background: var(--panel);
-  color: var(--btn-ink-ghost);         /* <-- darker ink for ghost */
+  color: var(--btn-ink-ghost);
   border-color: var(--border);
 }
 .button.ghost:hover { background: var(--accent-soft); border-color: color-mix(in oklab, var(--accent) 30%, var(--border)); }
 
 .button.primary {
   background: var(--accent);
-  color: var(--btn-ink-filled);        /* <-- off-white on accent fill */
+  color: var(--btn-ink-filled);
 }
 
 .button.linklike {
@@ -227,6 +263,15 @@ textarea { resize: vertical; min-height: 90px; }
   color: var(--accent);
   border-color: transparent;
   padding: 0;
+}
+
+/* Danger style (MyShares delete) */
+.button.danger {
+  background: var(--danger);
+  color: var(--danger-ink);
+}
+.button.danger:hover {
+  background: var(--danger-hover);
 }
 
 /* ========== Helpers ========== */
@@ -252,6 +297,11 @@ textarea { resize: vertical; min-height: 90px; }
   position: absolute !important; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
+.header-right {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 /* ========== Animations (gentle) ========== */
 @keyframes fadeUp {
@@ -268,7 +318,7 @@ textarea { resize: vertical; min-height: 90px; }
   padding: 0 var(--space-5);
 }
 
-/* Make cards bigger by default */
+/* Make cards bigger by default (override base) */
 .grid--cards {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
@@ -282,22 +332,17 @@ textarea { resize: vertical; min-height: 90px; }
   .ba-card { box-shadow: var(--shadow-md); }
 }
 
-/* Slightly taller visuals without cropping content */
-.ba-media {
-  aspect-ratio: 16 / 9;     /* change to 4 / 3 if you want taller cards */
-}
-.ba-media img {
-  object-fit: cover;       /* use 'cover' for edge-to-edge (may crop) */
-}
-
-/* Uniform square cards, fill image */
-.ba-media { aspect-ratio: 1 / 1; }        /* square frame for every card */
+/* Media frames for cards */
+/* Base: square cards */
+.ba-media { aspect-ratio: 1 / 1; }
 .ba-media img {
   width: 100%;
   height: 100%;
-  object-fit: cover;                       /* fill the box (may crop edges) */
+  object-fit: cover;       /* fill the box (may crop edges) */
   object-position: center;
 }
+/* Optional wide variant: add className="ba-media wide-16x9" where needed */
+.ba-media.wide-16x9 { aspect-ratio: 16 / 9; }
 
 /* Optional per-image nudges */
 .ba-media.pos-top img { object-position: top center; }
@@ -366,9 +411,100 @@ textarea { resize: vertical; min-height: 90px; }
   flex-wrap: wrap;
 }
 
+/* --- Mobile nav toggle hidden by default --- */
+.menu-toggle {
+  display: none;
+  appearance: none;
+  background: var(--panel);
+  color: var(--btn-ink-ghost);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  line-height: 0;
+  cursor: pointer;
+}
+.menu-toggle:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+}
 
+/* --- Mobile overlay + panel --- */
+.mobile-nav {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45); /* slate-ish backdrop */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+  z-index: 60; /* above .navbar (z:50) */
+}
+.mobile-nav.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mobile-nav__panel {
+  position: absolute;
+  top: var(--nav-h, 56px); /* sits below the navbar */
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  padding: 12px 16px;
+}
 
+/* Mobile link styles */
+.mnavlink {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--text);
+}
+.mnavlink:hover { background: var(--accent-soft); text-decoration: none; }
+.mnavlink.active { background: var(--accent); color: var(--accent-ink); }
 
+/* Footer area in mobile sheet */
+.mobile-nav__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.mobile-nav__email {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
+/* Prevent background scroll when menu opens */
+.no-scroll { overflow: hidden; }
 
+/* --- Responsive rules --- */
+/* Mobile edge padding (nav + main container align to edges) */
+@media (max-width: 720px) {
+  /* Slightly shorter nav on phones */
+  :root { --nav-h: 52px; }
 
+  /* Hide desktop nav groups; show burger */
+  .nav-desktop { display: none !important; }
+  .menu-toggle  { display: inline-flex !important; }
+
+  /* More generous left/right padding for the navbar and page content */
+  .navbar .container {
+    padding-left: max(var(--edge-pad-mobile), env(safe-area-inset-left)) !important;
+    padding-right: max(var(--edge-pad-mobile), env(safe-area-inset-right)) !important;
+  }
+  main.container {
+    padding-left: max(var(--edge-pad-mobile), env(safe-area-inset-left)) !important;
+    padding-right: max(var(--edge-pad-mobile), env(safe-area-inset-right)) !important;
+  }
+
+  /* Compact vertical rhythm */
+  .navbar__inner { padding: var(--space-2) 0; }
+  .brand { font-size: 1rem; }
+}

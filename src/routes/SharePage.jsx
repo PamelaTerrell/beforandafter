@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { Helmet } from 'react-helmet';
 import { supabase } from '../lib/supabase';
 
 const COMMUNITY_BUCKET = 'community';
@@ -17,7 +18,6 @@ export default function SharePage() {
       setLoading(true);
       setNotFound(false);
 
-      // Look up the public share by slug
       const { data, error } = await supabase
         .from('shares')
         .select('caption, media_path, created_at')
@@ -37,7 +37,6 @@ export default function SharePage() {
 
       setShare(data);
 
-      // Build a public URL for the community bucket object
       const { data: pub } = supabase
         .storage
         .from(COMMUNITY_BUCKET)
@@ -50,11 +49,26 @@ export default function SharePage() {
     return () => { cancelled = true; };
   }, [slug]);
 
-  if (loading) return <p style={{ padding: 16 }}>Loading…</p>;
+  const pageUrl = `${window.location.origin}/s/${slug}`;
+
+  if (loading) {
+    return (
+      <>
+        <Helmet>
+          <title>Loading… · Before & After Vault</title>
+        </Helmet>
+        <p style={{ padding: 16 }}>Loading…</p>
+      </>
+    );
+  }
 
   if (notFound) {
     return (
       <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+        <Helmet>
+          <title>Share not found · Before & After Vault</title>
+          <meta name="robots" content="noindex" />
+        </Helmet>
         <Link to="/" className="button ghost">← Home</Link>
         <h1 style={{ marginTop: 16 }}>Share not found</h1>
         <p style={{ marginTop: 8 }}>
@@ -63,8 +77,6 @@ export default function SharePage() {
       </div>
     );
   }
-
-  const pageUrl = `${window.location.origin}/s/${slug}`;
 
   async function copyLink() {
     try {
@@ -77,6 +89,26 @@ export default function SharePage() {
 
   return (
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+      {/* Social/meta tags */}
+      <Helmet>
+        <title>
+          {share?.caption ? `${share.caption} · Before & After Vault` : 'Community Share · Before & After Vault'}
+        </title>
+        <meta name="description" content={share?.caption || 'A community before-and-after share.'} />
+        <link rel="canonical" href={pageUrl} />
+
+        <meta property="og:type" content="article" />
+        <meta property="og:title" content={share?.caption || 'Community Share'} />
+        <meta property="og:description" content={share?.caption || 'A community before-and-after share.'} />
+        {imgUrl && <meta property="og:image" content={imgUrl} />}
+        <meta property="og:url" content={pageUrl} />
+
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={share?.caption || 'Community Share'} />
+        <meta name="twitter:description" content={share?.caption || 'A community before-and-after share.'} />
+        {imgUrl && <meta name="twitter:image" content={imgUrl} />}
+      </Helmet>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
         <Link to="/" className="button ghost">← Home</Link>
         <button className="button ghost" onClick={copyLink}>Copy link</button>

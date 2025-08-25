@@ -6,8 +6,9 @@ import App from './routes/App.jsx';
 import Login from './routes/Login.jsx';
 import Projects from './routes/Projects.jsx';
 import Project from './routes/Project.jsx';
-import Community from './routes/Community.jsx';   // ⬅️ add this
-import SharePage from './routes/SharePage.jsx';   // ⬅️ add this
+import Community from './routes/Community.jsx';   
+import SharePage from './routes/SharePage.jsx';   
+import MyShares from './routes/MyShares.jsx';
 
 import './index.css';
 
@@ -16,9 +17,9 @@ const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
   { path: '/projects', element: <Projects /> },
   { path: '/projects/:id', element: <Project /> },
-  { path: '/community', element: <Community /> }, // ⬅️ new
-  { path: '/s/:slug', element: <SharePage /> },   // ⬅️ new
-  // Optional catch-all: send unknown routes home (or make a NotFound page)
+  { path: '/community', element: <Community /> }, 
+  { path: '/s/:slug', element: <SharePage /> },   
+  { path: '/my-shares', element: <MyShares /> },
   { path: '*', element: <App /> },
 ]);
 
