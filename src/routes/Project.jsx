@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 const MEDIA_BUCKET = 'media';         // private bucket (already set up)
 const COMMUNITY_BUCKET = 'community'; // public bucket (you created)
 
-// One slug helper (removed the duplicate)
+// Slug helper
 function toSlug(s) {
   const base = (s || 'share')
     .toLowerCase()
@@ -15,6 +15,29 @@ function toSlug(s) {
     .replace(/^-+|-+$/g, '');
   const rand = Math.random().toString(36).slice(2, 7); // short random suffix
   return `${base}-${rand}`;
+}
+
+// Contact normalizer: returns URL, mailto:, or null if unrecognized
+function normalizeContact(input) {
+  const s = (input || '').trim();
+  if (!s) return null;
+
+  // already a URL or mailto
+  if (/^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
+
+  // //domain
+  if (/^\/\//i.test(s)) return `https:${s}`;
+
+  // email-like (simple)
+  const emailLike = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (emailLike.test(s)) return `mailto:${s}`;
+
+  // bare domain
+  const bareDomain = /^[a-z0-9.-]+\.[a-z]{2,}$/i;
+  if (bareDomain.test(s)) return `https://${s}`;
+
+  // Anything else (e.g., @handle) -> ignore to avoid broken links
+  return null;
 }
 
 export default function Project() {
@@ -299,6 +322,12 @@ function ProjectInner() {
 
       const caption = window.prompt('Add a caption (optional):') || null;
 
+      // NEW: optional display name + contact
+      const attribution_name = (window.prompt('Display name (optional, leave blank to stay anonymous):') || '').trim() || null;
+      const rawContact = window.prompt('Contact link (optional — website, IG, or email):') || '';
+      const attribution_url = normalizeContact(rawContact);
+      const show_attribution = !!(attribution_name || attribution_url);
+
       // 1) Signed URL for private image (short-lived)
       const { data: sig, error: sigErr } = await supabase
         .storage
@@ -334,7 +363,10 @@ function ProjectInner() {
           caption,
           media_path: public_path, // path within COMMUNITY bucket
           slug: sl,
-          is_public: true
+          is_public: true,
+          attribution_name,
+          attribution_url,
+          show_attribution
         });
 
       let { error: rowErr } = await insertShare(slug);

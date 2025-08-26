@@ -6,6 +6,16 @@ import PageLayout from '../components/PageLayout';
 const COMMUNITY_BUCKET = 'community';
 const PAGE_SIZE = 24;
 
+// Safety: only allow http(s) or mailto links to render
+function isSafeUrl(u) {
+  try {
+    const url = new URL(u, window.location.origin);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export default function Community() {
   const [shares, setShares] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,7 +25,7 @@ export default function Community() {
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
 
-  // For a tiny debounce without a library
+  // Tiny debounce for search
   useEffect(() => {
     const t = setTimeout(() => setAppliedQ(q.trim()), 300);
     return () => clearTimeout(t);
@@ -39,12 +49,14 @@ export default function Community() {
 
     let query = supabase
       .from('shares')
-      .select('id, caption, media_path, slug, created_at', { count: 'exact' })
+      .select(
+        'id, caption, media_path, slug, created_at, attribution_name, attribution_url, show_attribution',
+        { count: 'exact' }
+      )
       .eq('is_public', true)
       .order('created_at', { ascending: false });
 
     if (appliedQ) {
-      // caption ILIKE %appliedQ%
       query = query.ilike('caption', `%${appliedQ}%`);
     }
 
@@ -63,10 +75,7 @@ export default function Community() {
     }
 
     const withUrls = (data || []).map((row) => {
-      const { data: pub } = supabase
-        .storage
-        .from(COMMUNITY_BUCKET)
-        .getPublicUrl(row.media_path);
+      const { data: pub } = supabase.storage.from(COMMUNITY_BUCKET).getPublicUrl(row.media_path);
       return { ...row, publicUrl: pub?.publicUrl || null };
     });
 
@@ -75,7 +84,7 @@ export default function Community() {
       setTotal(count ?? null);
       setLoading(false);
     } else {
-      setShares(prev => [...prev, ...withUrls]);
+      setShares((prev) => [...prev, ...withUrls]);
       setLoadingMore(false);
     }
   }
@@ -86,8 +95,7 @@ export default function Community() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedQ]);
 
-  const canLoadMore =
-    total != null ? shares.length < total : true; // safe fallback
+  const canLoadMore = total != null ? shares.length < total : true; // safe fallback
 
   return (
     <PageLayout title="Community" subtitle="Recent public shares">
@@ -126,35 +134,60 @@ export default function Community() {
               gap: 16
             }}
           >
-            {shares.map((s) => (
-              <article className="card" key={s.id}>
-                <Link to={`/s/${s.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                  {s.publicUrl && (
-                    <img
-                      src={s.publicUrl}
-                      alt={s.caption || 'Community share'}
-                      style={{
-                        width: '100%',
-                        height: 180,
-                        objectFit: 'cover',
-                        borderTopLeftRadius: 10,
-                        borderTopRightRadius: 10
-                      }}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  )}
-                  <div style={{ padding: 12 }}>
-                    <h3 style={{ margin: 0, fontSize: 16 }}>
-                      {s.caption || 'Untitled'}
-                    </h3>
-                    <small style={{ color: '#666' }}>
-                      {new Date(s.created_at).toLocaleString()}
-                    </small>
-                  </div>
-                </Link>
-              </article>
-            ))}
+            {shares.map((s) => {
+              const showAttribution =
+                !!s.show_attribution &&
+                (!!s.attribution_name || (s.attribution_url && isSafeUrl(s.attribution_url)));
+
+              return (
+                <article className="card" key={s.id}>
+                  <Link to={`/s/${s.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                    {s.publicUrl && (
+                      <img
+                        src={s.publicUrl}
+                        alt={s.caption || 'Community share'}
+                        style={{
+                          width: '100%',
+                          height: 180,
+                          objectFit: 'cover',
+                          borderTopLeftRadius: 10,
+                          borderTopRightRadius: 10
+                        }}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    )}
+                    <div style={{ padding: 12 }}>
+                      <h3 style={{ margin: 0, fontSize: 16 }}>
+                        {s.caption || 'Untitled'}
+                      </h3>
+                      <small style={{ color: '#666' }}>
+                        {new Date(s.created_at).toLocaleString()}
+                      </small>
+
+                      {showAttribution && (
+                        <small style={{ display: 'block', marginTop: 6, color: 'var(--muted)' }}>
+                          by <strong>{s.attribution_name || 'Anonymous'}</strong>
+                          {s.attribution_url && isSafeUrl(s.attribution_url) && (
+                            <>
+                              {' · '}
+                              <a
+                                href={s.attribution_url}
+                                onClick={(e) => e.stopPropagation()}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                              >
+                                contact
+                              </a>
+                            </>
+                          )}
+                        </small>
+                      )}
+                    </div>
+                  </Link>
+                </article>
+              );
+            })}
           </div>
 
           {/* Load more */}

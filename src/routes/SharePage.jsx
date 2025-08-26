@@ -5,6 +5,16 @@ import { supabase } from '../lib/supabase';
 
 const COMMUNITY_BUCKET = 'community';
 
+// Safety: only allow http(s) or mailto links to render
+function isSafeUrl(u) {
+  try {
+    const url = new URL(u, window.location.origin);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export default function SharePage() {
   const { slug } = useParams();
   const [share, setShare] = useState(null);
@@ -20,7 +30,7 @@ export default function SharePage() {
 
       const { data, error } = await supabase
         .from('shares')
-        .select('caption, media_path, created_at')
+        .select('caption, media_path, created_at, attribution_name, attribution_url, show_attribution')
         .eq('slug', slug)
         .eq('is_public', true)
         .single();
@@ -87,6 +97,10 @@ export default function SharePage() {
     }
   }
 
+  const showAttribution =
+    !!share?.show_attribution &&
+    (!!share?.attribution_name || (share?.attribution_url && isSafeUrl(share.attribution_url)));
+
   return (
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
       {/* Social/meta tags */}
@@ -127,6 +141,24 @@ export default function SharePage() {
       )}
 
       {share?.caption && <p style={{ marginTop: 12, fontSize: 18 }}>{share.caption}</p>}
+
+      {showAttribution && (
+        <p style={{ marginTop: 8, color: 'var(--muted)' }}>
+          Shared by <strong>{share.attribution_name || 'Anonymous'}</strong>
+          {share.attribution_url && isSafeUrl(share.attribution_url) && (
+            <>
+              {' · '}
+              <a
+                href={share.attribution_url}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+              >
+                Contact
+              </a>
+            </>
+          )}
+        </p>
+      )}
 
       <small style={{ color: '#666' }}>
         Shared on {new Date(share.created_at).toLocaleString()}
