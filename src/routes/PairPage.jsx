@@ -1,33 +1,31 @@
-// src/pages/PairPage.jsx
+// src/routes/PairPage.jsx
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import { supabase } from '../lib/supabase';
 
-const MEDIA_BUCKET = 'media';
+const COMMUNITY_BUCKET = 'community'; // public
+const MEDIA_BUCKET = 'media';         // private
 
-/** Resolve a display URL for a storage object.
- *  - media bucket is private → ALWAYS use a signed URL (7 days)
- *  - (kept general in case you ever reuse this for public buckets)
- */
-async function resolveDisplayUrl(bucket, path) {
+// Public URL helper (always returns a URL string; may 404 if object missing)
+function publicUrl(bucket, path) {
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
+// Create a 7-day signed URL from the private bucket (works when viewer is authorized)
+async function resolvePrivateUrl(path) {
   if (!path) return null;
-
-  if (bucket === MEDIA_BUCKET) {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
-    return error ? null : (data?.signedUrl || null);
+  try {
+    const { data, error } = await supabase
+      .storage
+      .from(MEDIA_BUCKET)
+      .createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (!error) return data?.signedUrl || null;
+  } catch {
+    /* ignore */
   }
-
-  // (Public buckets path—unused here, but safe fallback)
-  const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
-  if (pub?.publicUrl) return pub.publicUrl;
-
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .createSignedUrl(path, 60 * 60 * 24 * 7);
-  return error ? null : (data?.signedUrl || null);
+  return null;
 }
 
 export default function PairPage() {
@@ -36,9 +34,16 @@ export default function PairPage() {
   const numericId = Number(idParam);
 
   const [pair, setPair] = useState(null);
+
+  // primary URLs we actually render
   const [beforeUrl, setBeforeUrl] = useState(null);
-  const [afterUrl, setAfterUrl] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [afterUrl,  setAfterUrl]  = useState(null);
+
+  // fallbacks (private signed), used if public URLs 404
+  const [fallbackBefore, setFallbackBefore] = useState(null);
+  const [fallbackAfter,  setFallbackAfter]  = useState(null);
+
+  const [loading,  setLoading]  = useState(true);
   const [notFound, setNotFound] = useState(false);
 
   const load = useCallback(async () => {
@@ -51,10 +56,12 @@ export default function PairPage() {
     setLoading(true);
     setNotFound(false);
 
+    // Fetch the pair row
     const { data, error } = await supabase
       .from('before_after_pairs')
-      .select('id, caption, before_path, after_path, created_at')
-      // .eq('is_public', true) // uncomment if you add this column and want public-only
+      .select('id, user_id, caption, before_path, after_path, created_at, is_public')
+      // If you later want public-only, uncomment:
+      // .eq('is_public', true)
       .eq('id', numericId)
       .single();
 
@@ -69,13 +76,23 @@ export default function PairPage() {
 
     setPair(data);
 
-    const [bUrl, aUrl] = await Promise.all([
-      resolveDisplayUrl(MEDIA_BUCKET, data.before_path),
-      resolveDisplayUrl(MEDIA_BUCKET, data.after_path),
+    // Prefer public copies in the community bucket
+    const pubBefore = publicUrl(COMMUNITY_BUCKET, `pairs/${data.id}/before.jpg`);
+    const pubAfter  = publicUrl(COMMUNITY_BUCKET, `pairs/${data.id}/after.jpg`);
+
+    // Prepare fallbacks from the private bucket (signed)
+    const [signedBefore, signedAfter] = await Promise.all([
+      resolvePrivateUrl(data.before_path),
+      resolvePrivateUrl(data.after_path),
     ]);
 
-    setBeforeUrl(bUrl);
-    setAfterUrl(aUrl);
+    setFallbackBefore(signedBefore);
+    setFallbackAfter(signedAfter);
+
+    // Use public if available; the <img> onError will swap to fallback if it 404s
+    setBeforeUrl(pubBefore || signedBefore || null);
+    setAfterUrl(pubAfter || signedAfter || null);
+
     setLoading(false);
   }, [numericId]);
 
@@ -144,8 +161,7 @@ export default function PairPage() {
 
       <h1 style={{ marginTop: 16 }}>Before &amp; After</h1>
 
-      {/* Use a class so our mobile CSS applies */}
-      <div className="pair-grid" style={{ marginTop: 12 }}>
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', marginTop: 12 }}>
         {beforeUrl && (
           <figure style={{ margin: 0, position: 'relative' }}>
             <img
@@ -154,7 +170,7 @@ export default function PairPage() {
               style={{ width: '100%', borderRadius: 12 }}
               loading="lazy"
               decoding="async"
-              onError={() => setBeforeUrl(null)}
+              onError={() => setBeforeUrl(fallbackBefore || null)}
             />
             <figcaption style={{
               position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,.65)', color: '#fff',
@@ -170,7 +186,7 @@ export default function PairPage() {
               style={{ width: '100%', borderRadius: 12 }}
               loading="lazy"
               decoding="async"
-              onError={() => setAfterUrl(null)}
+              onError={() => setAfterUrl(fallbackAfter || null)}
             />
             <figcaption style={{
               position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,.65)', color: '#fff',
@@ -187,13 +203,8 @@ export default function PairPage() {
       </small>
 
       <style>{`
-        .pair-grid {
-          display: grid;
-          gap: 8px;
-          grid-template-columns: 1fr 1fr;
-        }
         @media (max-width: 720px) {
-          .pair-grid { grid-template-columns: 1fr; }
+          .grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </div>

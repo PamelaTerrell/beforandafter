@@ -1,11 +1,12 @@
+// src/routes/Community.jsx
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
 import BeforeAfterUploader from './BeforeAfterUploader';
 
-const COMMUNITY_BUCKET = 'community'; // for single-image shares
-const MEDIA_BUCKET = 'media';         // for before/after pairs
+const COMMUNITY_BUCKET = 'community'; // for public single-image shares + public copies of pairs
+const MEDIA_BUCKET = 'media';         // private originals for pairs
 const PAGE_SIZE = 24;
 const PER_TABLE_LIMIT = 24; // how many we pull from each table per batch
 
@@ -19,34 +20,25 @@ function isSafeUrl(u) {
   }
 }
 
-// Get public URL for a storage object (only for public buckets)
+// Get public URL for a storage object
 function publicUrl(bucket, path) {
+  if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl || null;
 }
 
-// ✅ Use a signed URL for private media; public URL for community
+// Try public URL first, fall back to 7-day signed URL if bucket/object isn't public
 async function resolveDisplayUrl(bucket, path) {
   if (!path) return null;
-
-  // media is private → always sign (7 days)
-  if (bucket === MEDIA_BUCKET) {
-    const { data, error } = await supabase
-      .storage
-      .from(bucket)
-      .createSignedUrl(path, 60 * 60 * 24 * 7);
-    return error ? null : (data?.signedUrl || null);
-  }
-
-  // community is public → use public URL, with a signed fallback just in case
-  const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
-  if (pub?.publicUrl) return pub.publicUrl;
-
-  const { data, error } = await supabase
-    .storage
-    .from(bucket)
-    .createSignedUrl(path, 60 * 60 * 24 * 7);
-  return error ? null : (data?.signedUrl || null);
+  try {
+    const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
+    if (pub?.publicUrl) return pub.publicUrl;
+  } catch {}
+  try {
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (!error) return data?.signedUrl || null;
+  } catch {}
+  return null;
 }
 
 // Normalize single-image share rows
@@ -63,7 +55,7 @@ function mapShareRow(row) {
     show_attribution: !!row.show_attribution,
     images: [
       {
-        src: publicUrl(COMMUNITY_BUCKET, row.media_path), // community is public
+        src: publicUrl(COMMUNITY_BUCKET, row.media_path),
         alt: row.caption || 'Community share'
       }
     ]
@@ -76,7 +68,7 @@ export default function Community() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
-  const [cursor, setCursor] = useState(null);   // ISO string of smallest created_at in current list
+  const [cursor, setCursor] = useState(null);   // ISO string of the smallest created_at in current list
   const [endReached, setEndReached] = useState(false);
 
   // Auth state for gating the uploader
@@ -97,7 +89,7 @@ export default function Community() {
     return () => clearTimeout(t);
   }, [q]);
 
-  // Where-clause helpers
+  // Build the where-clause helpers
   function applyCommonFilters(queryBuilder) {
     if (appliedQ) queryBuilder = queryBuilder.ilike('caption', `%${appliedQ}%`);
     if (cursor) queryBuilder = queryBuilder.lt('created_at', cursor);
@@ -130,13 +122,14 @@ export default function Community() {
       if (sharesErr) throw sharesErr;
       const mappedShares = (sharesData || []).map(mapShareRow);
 
-      // BEFORE/AFTER PAIRS — resolve image URLs (media bucket = private)
+      // BEFORE/AFTER PAIRS — prefer public copies in COMMUNITY, else fall back to private MEDIA signed URLs
       let pairsQ = supabase
         .from('before_after_pairs')
         .select('id, caption, before_path, after_path, created_at, is_public')
-        .eq('is_public', true) // keep if you added this column
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
+      // If you *didn't* add is_public to the table, remove the next line:
+      pairsQ = pairsQ.eq('is_public', true);
       pairsQ = applyCommonFilters(pairsQ);
 
       const { data: pairsData, error: pairsErr } = await pairsQ;
@@ -144,10 +137,15 @@ export default function Community() {
 
       const mappedPairs = await Promise.all(
         (pairsData || []).map(async (row) => {
+          // Public copies written by the uploader: community/pairs/:id/before.jpg|after.jpg
+          const beforePublic = publicUrl(COMMUNITY_BUCKET, `pairs/${row.id}/before.jpg`);
+          const afterPublic  = publicUrl(COMMUNITY_BUCKET, `pairs/${row.id}/after.jpg`);
+
           const [beforeUrl, afterUrl] = await Promise.all([
-            resolveDisplayUrl(MEDIA_BUCKET, row.before_path),
-            resolveDisplayUrl(MEDIA_BUCKET, row.after_path),
+            beforePublic || resolveDisplayUrl(MEDIA_BUCKET, row.before_path),
+            afterPublic  || resolveDisplayUrl(MEDIA_BUCKET, row.after_path),
           ]);
+
           return {
             key: `pair:${row.id}`,
             type: 'pair',
@@ -179,6 +177,7 @@ export default function Community() {
             )
           : cursor;
 
+      // If both queries returned 0 and nothing sliced, we've reached the end
       const exhausted = (mappedShares.length === 0 && mappedPairs.length === 0) || pageSlice.length === 0;
 
       if (reset) {
@@ -267,7 +266,7 @@ export default function Community() {
                 const img = it.images[0];
                 const cardContent = (
                   <>
-                    {img?.src && (
+                    {img?.src ? (
                       <img
                         src={img.src}
                         alt={img.alt}
@@ -281,6 +280,16 @@ export default function Community() {
                         loading="lazy"
                         decoding="async"
                         onError={(e) => { e.currentTarget.src = ''; }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: '100%',
+                          height: 180,
+                          background: 'var(--accent-soft)',
+                          borderTopLeftRadius: 10,
+                          borderTopRightRadius: 10
+                        }}
                       />
                     )}
                     <div style={{ padding: 12 }}>
@@ -330,7 +339,7 @@ export default function Community() {
                   <article className="card" key={it.key}>
                     <Link to={`/p/${it.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                        {beforeImg?.src && (
+                        {(beforeImg?.src ? (
                           <div style={{ position: 'relative' }}>
                             <img
                               src={beforeImg.src}
@@ -360,8 +369,11 @@ export default function Community() {
                               Before
                             </span>
                           </div>
-                        )}
-                        {afterImg?.src && (
+                        ) : (
+                          <div style={{ height: 180, background: 'var(--accent-soft)', borderTopLeftRadius: 10 }} />
+                        ))}
+
+                        {(afterImg?.src ? (
                           <div style={{ position: 'relative' }}>
                             <img
                               src={afterImg.src}
@@ -391,7 +403,9 @@ export default function Community() {
                               After
                             </span>
                           </div>
-                        )}
+                        ) : (
+                          <div style={{ height: 180, background: 'var(--accent-soft)', borderTopRightRadius: 10 }} />
+                        ))}
                       </div>
 
                       <div style={{ padding: 12 }}>
