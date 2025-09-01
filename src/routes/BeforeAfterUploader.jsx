@@ -1,10 +1,10 @@
-// src/routes/BeforeAfterUploader.jsx
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
-const MEDIA_BUCKET = "media";       // private
-const COMMUNITY_BUCKET = "community"; // public
+const MEDIA_BUCKET = "media";
 
+// --- helpers ---
 function sanitizeName(name = "") {
   const dot = name.lastIndexOf(".");
   const base = (dot > -1 ? name.slice(0, dot) : name)
@@ -19,6 +19,7 @@ function fileExt(mime = "image/jpeg") {
   if (mime.includes("webp")) return ".webp";
   return ".jpg";
 }
+/** Downscale + recompress to JPEG/WebP, preserving aspect ratio. */
 async function downscaleImage(
   file,
   { maxW = 2000, maxH = 2000, mime = "image/jpeg", quality = 0.9 } = {}
@@ -65,8 +66,11 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [createdId, setCreatedId] = useState(null);
-  const [uiState, setUiState] = useState("idle");
+  const [uiState, setUiState] = useState("idle"); // "idle" | "uploading" | "done" | "error"
 
+  const navigate = useNavigate();
+
+  // Safe preview URLs
   useEffect(() => {
     if (!beforeFile) { setBeforePreview(null); return; }
     const url = URL.createObjectURL(beforeFile);
@@ -98,7 +102,9 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
 
   const handleSubmit = async (e) => {
     if (e?.preventDefault) e.preventDefault();
-    setError(""); setCreatedId(null); setProgress(0);
+    setError("");
+    setCreatedId(null);
+    setProgress(0);
     setUiState("uploading");
 
     if (!beforeFile || !afterFile) {
@@ -112,7 +118,7 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
       const { data: { user }, error: userErr } = await supabase.auth.getUser();
       if (userErr || !user) throw new Error("You must be signed in.");
 
-      // 2) downscale once (we will reuse these blobs twice)
+      // 2) downscale
       const preferredMime = "image/jpeg";
       const [{ blob: beforeBlob }, { blob: afterBlob }] = await Promise.all([
         downscaleImage(beforeFile, { mime: preferredMime }),
@@ -120,7 +126,7 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
       ]);
       setProgress(35);
 
-      // 3) upload private originals to MEDIA bucket
+      // 3) upload to storage  (path starts with user.id to satisfy RLS)
       const ts = Date.now();
       const baseDir = `${user.id}/${ts}`;
       const beforeSafe = sanitizeName(beforeFile.name).replace(/\.[^.]+$/, fileExt(preferredMime));
@@ -132,21 +138,21 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         upsert: false, contentType: preferredMime
       });
       if (up1.error) throw up1.error;
-      setProgress(60);
+      setProgress(65);
 
       const up2 = await supabase.storage.from(MEDIA_BUCKET).upload(afterPath, afterBlob, {
         upsert: false, contentType: preferredMime
       });
       if (up2.error) throw up2.error;
-      setProgress(80);
+      setProgress(85);
 
-      // 4) insert DB row (BIGINT id)
+      // 4) insert DB row (with user_id to satisfy RLS)
       const insertRow = {
         user_id: user.id,
         before_path: beforePath,
         after_path: afterPath,
         caption: caption?.trim() || null,
-        is_public: true,
+        is_public: true,            // you’re listing only public pairs on Community
       };
       if (communityId) insertRow.community_id = communityId;
 
@@ -155,38 +161,28 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         .insert(insertRow)
         .select("id")
         .single();
+
       if (insErr) throw insErr;
 
-      const pairId = data.id;
-
-      // 5) NEW: upload public copies to COMMUNITY bucket (deterministic paths)
-      const pubBeforePath = `pairs/${pairId}/before.jpg`;
-      const pubAfterPath  = `pairs/${pairId}/after.jpg`;
-
-      const pub1 = await supabase.storage
-        .from(COMMUNITY_BUCKET)
-        .upload(pubBeforePath, beforeBlob, { upsert: true, contentType: preferredMime });
-      if (pub1.error) throw pub1.error;
-
-      const pub2 = await supabase.storage
-        .from(COMMUNITY_BUCKET)
-        .upload(pubAfterPath, afterBlob, { upsert: true, contentType: preferredMime });
-      if (pub2.error) throw pub2.error;
-
-      // (Optional) If you added columns public_before_path/public_after_path, you could update them here.
-
-      // done
       setProgress(100);
       setUiState("done");
-      setBeforeFile(null); setAfterFile(null); setCaption("");
-      setCreatedId(pairId);
-      onCreated?.({ id: pairId });
+      setBeforeFile(null);
+      setAfterFile(null);
+      setCaption("");
+      setCreatedId(data?.id ?? null);
+
+      // let Community refresh if parent provided a callback
+      onCreated?.(data);
+
+      // 5) 🚀 go straight to the details page so you don’t hit a 404
+      // tiny timeout helps avoid any UI race
+      setTimeout(() => navigate(`/p/${data.id}`), 120);
     } catch (err) {
       console.error("[BA] ERROR", err);
-      const msg = err?.message || "Upload failed";
-      surfaceError(msg);
+      surfaceError(err?.message || "Upload failed");
     } finally {
       setLoading(false);
+      // clear file inputs
       document.querySelectorAll(".ba-uploader input[type=file]").forEach((inp) => (inp.value = ""));
     }
   };
@@ -195,41 +191,87 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
     <form onSubmit={handleSubmit} className="ba-uploader">
       <small style={{ color: "#6b7280" }}>status: {uiState}</small>
 
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      {error && (
+        <div className="error-banner" role="alert">{error}</div>
+      )}
 
       <div className="row">
         <label className="file">
           <span>Before image</span>
-          <input type="file" accept="image/*"
-            onChange={(e) => { setBeforeFile(e.target.files?.[0] || null); setError(""); }} />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => { setBeforeFile(e.target.files?.[0] || null); setError(""); }}
+          />
         </label>
         <label className="file">
           <span>After image</span>
-          <input type="file" accept="image/*"
-            onChange={(e) => { setAfterFile(e.target.files?.[0] || null); setError(""); }} />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => { setAfterFile(e.target.files?.[0] || null); setError(""); }}
+          />
         </label>
       </div>
 
       <div className="caption">
-        <input type="text" placeholder="Add an optional caption" value={caption}
-          onChange={(e) => setCaption(e.target.value)} maxLength={160} />
+        <input
+          type="text"
+          placeholder="Add an optional caption"
+          value={caption}
+          onChange={(e) => setCaption(e.target.value)}
+          maxLength={160}
+        />
       </div>
 
       {(beforePreview || afterPreview) && (
         <div className="preview">
-          <div className="side">{beforePreview && <img alt="Before preview" src={beforePreview} />}<div className="tag">Before</div></div>
-          <div className="side">{afterPreview && <img alt="After preview" src={afterPreview} />}<div className="tag">After</div></div>
+          <div className="side">
+            {beforePreview && (
+              <img alt="Before preview" src={beforePreview} onError={(e) => { e.currentTarget.src = ""; }} />
+            )}
+            <div className="tag">Before</div>
+          </div>
+          <div className="side">
+            {afterPreview && (
+              <img alt="After preview" src={afterPreview} onError={(e) => { e.currentTarget.src = ""; }} />
+            )}
+            <div className="tag">After</div>
+          </div>
         </div>
       )}
 
       <div className="actions">
-        <button type="button" className="button ghost" onClick={handleSwap} disabled={!beforeFile || !afterFile}>Swap</button>
-        <button type="button" className="button" onClick={handleSubmit} disabled={loading}>
+        <button
+          type="button"
+          className="button ghost"
+          onClick={handleSwap}
+          disabled={!beforeFile || !afterFile}
+        >
+          Swap
+        </button>
+        <button
+          type="button"
+          className="button"
+          onClick={handleSubmit}
+          disabled={loading}
+        >
           {loading ? (progress >= 100 ? "Finishing…" : `Uploading… ${progress}%`) : "Post Before + After"}
         </button>
       </div>
 
-      {createdId && <p className="success">Posted! <a href={`/p/${createdId}`}>View details</a></p>}
+      {createdId && (
+        <p className="success">
+          Posted!{" "}
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => navigate(`/p/${createdId}`)}
+          >
+            View details
+          </button>
+        </p>
+      )}
 
       <small className="hint">Tip: large images are auto-compressed to ~2000px max for faster uploads.</small>
 
@@ -244,11 +286,14 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         .tag { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; padding: 4px 8px; border-radius: 999px; }
         .actions { display: flex; gap: 8px; }
         .error-banner { background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B; padding: 8px 10px; border-radius: 10px; }
-        .success { color: #065f46; }
+        .success { color: #065f46; display: flex; align-items: center; gap: 8px; }
         .hint { color: #6b7280; }
         button { padding: 10px 14px; border-radius: 10px; border: none; background: #111827; color: #fff; cursor: pointer; }
-        .button.ghost { background: transparent; border: 1px solid #d1d5db; color: #111827; }
-        @media (max-width: 720px) { .row { grid-template-columns: 1fr; } .preview { grid-template-columns: 1fr 1fr; } }
+        .button.ghost, .button.ghost:where(button) { background: transparent; border: 1px solid #d1d5db; color: #111827; }
+        @media (max-width: 720px) {
+          .row { grid-template-columns: 1fr; }
+          .preview { grid-template-columns: 1fr 1fr; }
+        }
       `}</style>
     </form>
   );

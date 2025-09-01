@@ -1,16 +1,16 @@
 // src/routes/Community.jsx
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
 import BeforeAfterUploader from './BeforeAfterUploader';
 
-const COMMUNITY_BUCKET = 'community'; // for public single-image shares + public copies of pairs
-const MEDIA_BUCKET = 'media';         // private originals for pairs
+const COMMUNITY_BUCKET = 'community'; // for single-image shares
+const MEDIA_BUCKET = 'media';         // for before/after pairs
 const PAGE_SIZE = 24;
-const PER_TABLE_LIMIT = 24; // how many we pull from each table per batch
+const PER_TABLE_LIMIT = 24;
 
-// Safety: only allow http(s) or mailto links to render
+// ---------------- helpers ----------------
 function isSafeUrl(u) {
   try {
     const url = new URL(u, window.location.origin);
@@ -20,25 +20,113 @@ function isSafeUrl(u) {
   }
 }
 
-// Get public URL for a storage object
 function publicUrl(bucket, path) {
-  if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl || null;
 }
 
-// Try public URL first, fall back to 7-day signed URL if bucket/object isn't public
-async function resolveDisplayUrl(bucket, path) {
-  if (!path) return null;
-  try {
-    const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
-    if (pub?.publicUrl) return pub.publicUrl;
-  } catch {}
-  try {
-    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
-    if (!error) return data?.signedUrl || null;
-  } catch {}
-  return null;
+// A tiny image component that tries public URL, then signed URL.
+// It renders nothing unless an image successfully loads (so badges don’t float).
+function LabeledImage({
+  bucket,
+  path,
+  alt,
+  label,
+  roundLeft = false,
+  roundRight = false,
+  height = 180,
+}) {
+  const [src, setSrc] = useState(null);
+  const [triedSigned, setTriedSigned] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      if (!path) return;
+
+      // Try public first
+      const pub = publicUrl(bucket, path);
+      if (pub && !cancelled) {
+        setSrc(pub);
+        return;
+      }
+
+      // Fallback: signed URL (7 days)
+      try {
+        const { data, error } = await supabase
+          .storage
+          .from(bucket)
+          .createSignedUrl(path, 60 * 60 * 24 * 7);
+        if (!cancelled && !error && data?.signedUrl) {
+          setSrc(data.signedUrl);
+        }
+      } catch {
+        /* ignore; onError below will log when it fails to load */
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [bucket, path]);
+
+  if (!src) return null;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <img
+        src={src}
+        alt={alt}
+        style={{
+          width: '100%',
+          height,
+          objectFit: 'cover',
+          borderTopLeftRadius: roundLeft ? 10 : 0,
+          borderTopRightRadius: roundRight ? 10 : 0
+        }}
+        loading="lazy"
+        decoding="async"
+        onError={async () => {
+          // One more attempt: force a fresh signed URL if the public URL 404’d
+          if (triedSigned) {
+            console.warn('[Community] image failed permanently:', { bucket, path, src });
+            setSrc(null);
+            return;
+          }
+          setTriedSigned(true);
+          try {
+            const { data, error } = await supabase
+              .storage
+              .from(bucket)
+              .createSignedUrl(path, 60 * 60 * 24 * 7);
+            if (!error && data?.signedUrl) {
+              const bust = (data.signedUrl.includes('?') ? '&' : '?') + 'rb=' + Date.now();
+              setSrc(data.signedUrl + bust);
+            } else {
+              console.warn('[Community] signed URL generation failed:', { bucket, path, error });
+              setSrc(null);
+            }
+          } catch (e) {
+            console.warn('[Community] signed URL error:', { bucket, path, e });
+            setSrc(null);
+          }
+        }}
+      />
+      <span
+        style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          background: 'rgba(0,0,0,.65)',
+          color: '#fff',
+          padding: '2px 8px',
+          borderRadius: 999,
+          fontSize: 12
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
 }
 
 // Normalize single-image share rows
@@ -62,6 +150,7 @@ function mapShareRow(row) {
   };
 }
 
+// ---------------- page ----------------
 export default function Community() {
   const [items, setItems] = useState([]);       // unified list (singles + pairs)
   const [loading, setLoading] = useState(true);
@@ -83,17 +172,16 @@ export default function Community() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Tiny debounce for search
+  // debounce search
   useEffect(() => {
     const t = setTimeout(() => setAppliedQ(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
 
-  // Build the where-clause helpers
-  function applyCommonFilters(queryBuilder) {
-    if (appliedQ) queryBuilder = queryBuilder.ilike('caption', `%${appliedQ}%`);
-    if (cursor) queryBuilder = queryBuilder.lt('created_at', cursor);
-    return queryBuilder;
+  function applyCommonFilters(qb) {
+    if (appliedQ) qb = qb.ilike('caption', `%${appliedQ}%`);
+    if (cursor) qb = qb.lt('created_at', cursor);
+    return qb;
   }
 
   async function fetchBatch({ reset = false } = {}) {
@@ -107,7 +195,7 @@ export default function Community() {
         setLoadingMore(true);
       }
 
-      // SHARES (single-image posts)
+      // SHARES
       let sharesQ = supabase
         .from('shares')
         .select(
@@ -122,53 +210,35 @@ export default function Community() {
       if (sharesErr) throw sharesErr;
       const mappedShares = (sharesData || []).map(mapShareRow);
 
-      // BEFORE/AFTER PAIRS — prefer public copies in COMMUNITY, else fall back to private MEDIA signed URLs
+      // BEFORE/AFTER PAIRS
       let pairsQ = supabase
         .from('before_after_pairs')
         .select('id, caption, before_path, after_path, created_at, is_public')
+        .eq('is_public', true) // keep community feed public-only
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
-      // If you *didn't* add is_public to the table, remove the next line:
-      pairsQ = pairsQ.eq('is_public', true);
       pairsQ = applyCommonFilters(pairsQ);
 
       const { data: pairsData, error: pairsErr } = await pairsQ;
       if (pairsErr) throw pairsErr;
 
-      const mappedPairs = await Promise.all(
-        (pairsData || []).map(async (row) => {
-          // Public copies written by the uploader: community/pairs/:id/before.jpg|after.jpg
-          const beforePublic = publicUrl(COMMUNITY_BUCKET, `pairs/${row.id}/before.jpg`);
-          const afterPublic  = publicUrl(COMMUNITY_BUCKET, `pairs/${row.id}/after.jpg`);
+      const mappedPairs = (pairsData || []).map((row) => ({
+        key: `pair:${row.id}`,
+        type: 'pair',
+        id: row.id,
+        caption: row.caption || 'Untitled',
+        created_at: row.created_at,
+        before_path: row.before_path,
+        after_path: row.after_path,
+      }));
 
-          const [beforeUrl, afterUrl] = await Promise.all([
-            beforePublic || resolveDisplayUrl(MEDIA_BUCKET, row.before_path),
-            afterPublic  || resolveDisplayUrl(MEDIA_BUCKET, row.after_path),
-          ]);
-
-          return {
-            key: `pair:${row.id}`,
-            type: 'pair',
-            id: row.id,
-            caption: row.caption || 'Untitled',
-            created_at: row.created_at,
-            images: [
-              { src: beforeUrl, alt: 'Before' },
-              { src: afterUrl,  alt: 'After'  }
-            ]
-          };
-        })
-      );
-
-      // Merge + sort by created_at desc
+      // Merge + sort
       const merged = [...mappedShares, ...mappedPairs].sort(
         (a, b) => new Date(b.created_at) - new Date(a.created_at)
       );
 
-      // Take just PAGE_SIZE for this batch
       const pageSlice = merged.slice(0, PAGE_SIZE);
 
-      // Determine next cursor (the oldest created_at we returned)
       const nextCursor =
         pageSlice.length > 0
           ? pageSlice.reduce(
@@ -177,14 +247,12 @@ export default function Community() {
             )
           : cursor;
 
-      // If both queries returned 0 and nothing sliced, we've reached the end
-      const exhausted = (mappedShares.length === 0 && mappedPairs.length === 0) || pageSlice.length === 0;
+      const exhausted =
+        (mappedShares.length === 0 && mappedPairs.length === 0) || pageSlice.length === 0;
 
-      if (reset) {
-        setItems(pageSlice);
-      } else {
-        setItems((prev) => [...prev, ...pageSlice]);
-      }
+      if (reset) setItems(pageSlice);
+      else setItems((prev) => [...prev, ...pageSlice]);
+
       setCursor(nextCursor);
       if (exhausted) setEndReached(true);
     } catch (err) {
@@ -199,7 +267,6 @@ export default function Community() {
     }
   }
 
-  // Initial + when search changes
   useEffect(() => {
     fetchBatch({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,7 +333,7 @@ export default function Community() {
                 const img = it.images[0];
                 const cardContent = (
                   <>
-                    {img?.src ? (
+                    {img?.src && (
                       <img
                         src={img.src}
                         alt={img.alt}
@@ -280,16 +347,6 @@ export default function Community() {
                         loading="lazy"
                         decoding="async"
                         onError={(e) => { e.currentTarget.src = ''; }}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: '100%',
-                          height: 180,
-                          background: 'var(--accent-soft)',
-                          borderTopLeftRadius: 10,
-                          borderTopRightRadius: 10
-                        }}
                       />
                     )}
                     <div style={{ padding: 12 }}>
@@ -334,78 +391,26 @@ export default function Community() {
 
               // Pair card (side-by-side) — clickable to /p/:id
               if (it.type === 'pair') {
-                const [beforeImg, afterImg] = it.images;
                 return (
                   <article className="card" key={it.key}>
                     <Link to={`/p/${it.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                        {(beforeImg?.src ? (
-                          <div style={{ position: 'relative' }}>
-                            <img
-                              src={beforeImg.src}
-                              alt={beforeImg.alt}
-                              style={{
-                                width: '100%',
-                                height: 180,
-                                objectFit: 'cover',
-                                borderTopLeftRadius: 10
-                              }}
-                              loading="lazy"
-                              decoding="async"
-                              onError={(e) => { e.currentTarget.src = ''; }}
-                            />
-                            <span
-                              style={{
-                                position: 'absolute',
-                                top: 8,
-                                left: 8,
-                                background: 'rgba(0,0,0,.65)',
-                                color: '#fff',
-                                padding: '2px 8px',
-                                borderRadius: 999,
-                                fontSize: 12
-                              }}
-                            >
-                              Before
-                            </span>
-                          </div>
-                        ) : (
-                          <div style={{ height: 180, background: 'var(--accent-soft)', borderTopLeftRadius: 10 }} />
-                        ))}
-
-                        {(afterImg?.src ? (
-                          <div style={{ position: 'relative' }}>
-                            <img
-                              src={afterImg.src}
-                              alt={afterImg.alt}
-                              style={{
-                                width: '100%',
-                                height: 180,
-                                objectFit: 'cover',
-                                borderTopRightRadius: 10
-                              }}
-                              loading="lazy"
-                              decoding="async"
-                              onError={(e) => { e.currentTarget.src = ''; }}
-                            />
-                            <span
-                              style={{
-                                position: 'absolute',
-                                top: 8,
-                                left: 8,
-                                background: 'rgba(0,0,0,.65)',
-                                color: '#fff',
-                                padding: '2px 8px',
-                                borderRadius: 999,
-                                fontSize: 12
-                              }}
-                            >
-                              After
-                            </span>
-                          </div>
-                        ) : (
-                          <div style={{ height: 180, background: 'var(--accent-soft)', borderTopRightRadius: 10 }} />
-                        ))}
+                        <LabeledImage
+                          bucket={MEDIA_BUCKET}
+                          path={it.before_path}
+                          alt="Before"
+                          label="Before"
+                          roundLeft
+                          height={180}
+                        />
+                        <LabeledImage
+                          bucket={MEDIA_BUCKET}
+                          path={it.after_path}
+                          alt="After"
+                          label="After"
+                          roundRight
+                          height={180}
+                        />
                       </div>
 
                       <div style={{ padding: 12 }}>

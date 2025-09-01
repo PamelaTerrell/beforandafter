@@ -22,6 +22,8 @@ const router = createBrowserRouter([
   { path: '/s/:slug', element: <SharePage /> },
   { path: '/p/:id', element: <PairPage /> },   // <-- fixed syntax + trailing comma
   { path: '/my-shares', element: <MyShares /> },
+{ path: '/p/:id', element: <PairPage /> },
+
   { path: '*', element: <App /> },
 ]);
 
