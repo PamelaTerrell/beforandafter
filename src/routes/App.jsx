@@ -1,19 +1,70 @@
-import { useEffect, useState } from 'react';
+// src/routes/App.jsx
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
 
-const COMMUNITY_BUCKET = 'community';
+const COMMUNITY_BUCKET = 'community'; // single-image shares (public)
+const MEDIA_BUCKET = 'media';         // before/after pairs (private)
+const HOMEPAGE_LIMIT = 8;
+
+/* ---------- URL helpers ---------- */
+
+// Community bucket is public: a simple public URL is fine
+function publicUrl(bucket, path) {
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
+// Media bucket is private: ALWAYS sign (no public URL attempt)
+async function resolveMediaUrl(path) {
+  if (!path) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
+    if (!error) return data?.signedUrl || null;
+  } catch {}
+  return null;
+}
+
+// Normalize single-image "shares" row
+function mapShareRow(row) {
+  return {
+    key: `share:${row.slug}`,
+    type: 'single',
+    id: row.slug,
+    caption: row.caption || 'Untitled',
+    created_at: row.created_at,
+    href: `/s/${row.slug}`,
+    image: {
+      src: publicUrl(COMMUNITY_BUCKET, row.media_path),
+      alt: row.caption || 'Community share',
+    },
+  };
+}
+
+// Normalize before/after pair; we’ll resolve URLs after
+function mapPairRow(row) {
+  return {
+    key: `pair:${row.id}`,
+    type: 'pair',
+    id: row.id, // bigint id, used in /p/:id
+    caption: row.caption || 'Untitled',
+    created_at: row.created_at,
+    href: `/p/${row.id}`,
+    before_path: row.before_path,
+    after_path: row.after_path,
+  };
+}
 
 export default function App() {
   const [email, setEmail] = useState(null);
+  const [items, setItems] = useState([]); // mixed list (singles + pairs)
+  const [loading, setLoading] = useState(true);
 
-  // Recent community shares (for the homepage strip)
-  const [recent, setRecent] = useState([]);
-  const [recentLoading, setRecentLoading] = useState(true);
-
+  // auth badge
   useEffect(() => {
-    // Auth badge
     supabase.auth.getSession().then(({ data }) => {
       setEmail(data.session?.user?.email ?? null);
     });
@@ -23,44 +74,62 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch both feeds, merge, sort, slice
   useEffect(() => {
-    // Fetch a few recent public shares for the homepage
     (async () => {
-      setRecentLoading(true);
-      const { data, error } = await supabase
+      setLoading(true);
+
+      // 1) Latest single-image shares
+      const { data: shares, error: sharesErr } = await supabase
         .from('shares')
         .select('slug, caption, media_path, created_at')
         .eq('is_public', true)
         .order('created_at', { ascending: false })
-        .limit(8);
+        .limit(HOMEPAGE_LIMIT);
+      if (sharesErr) console.error('[Home] shares error:', sharesErr);
+      const mappedShares = (shares || []).map(mapShareRow);
 
-      if (error || !data) {
-        setRecent([]);
-        setRecentLoading(false);
-        return;
-      }
+      // 2) Latest before/after pairs (public)
+      const { data: pairs, error: pairsErr } = await supabase
+        .from('before_after_pairs')
+        .select('id, caption, before_path, after_path, created_at, is_public')
+        .eq('is_public', true)
+        .order('created_at', { ascending: false })
+        .limit(HOMEPAGE_LIMIT);
+      if (pairsErr) console.error('[Home] pairs error:', pairsErr);
 
-      const withUrls = data.map(row => {
-        const { data: pub } = supabase
-          .storage
-          .from(COMMUNITY_BUCKET)
-          .getPublicUrl(row.media_path);
-        return { ...row, publicUrl: pub?.publicUrl || null };
-      });
+      // Resolve signed URLs for media (private bucket)
+      const mappedPairs = await Promise.all(
+        (pairs || []).map(async (row) => {
+          const base = mapPairRow(row);
+          const [beforeUrl, afterUrl] = await Promise.all([
+            resolveMediaUrl(row.before_path),
+            resolveMediaUrl(row.after_path),
+          ]);
+          return { ...base, beforeUrl, afterUrl };
+        })
+      );
 
-      setRecent(withUrls);
-      setRecentLoading(false);
+      // Optional safety: drop pairs where neither URL resolved (old rows with dead paths)
+      const cleanedPairs = mappedPairs.filter(p => p.beforeUrl || p.afterUrl);
+
+      // 3) Merge + sort by created_at desc, keep HOMEPAGE_LIMIT
+      const merged = [...mappedShares, ...cleanedPairs].sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      );
+      setItems(merged.slice(0, HOMEPAGE_LIMIT));
+      setLoading(false);
     })();
   }, []);
 
-  const gallery = [
+  const gallery = useMemo(() => ([
     { src: '/kitchen.png',    title: 'Kitchen Makeover',    tag: 'Before → After', alt: 'Kitchen makeover split image: before and after' },
     { src: '/yard.png',       title: 'Backyard + Gazebo',   tag: 'Before → After', alt: 'Yard with new gazebo: before and after' },
     { src: '/tub.png',        title: 'Bathroom Refresh',    tag: 'Before → After', alt: 'Bathtub and tile refresh: before and after' },
     { src: '/weightloss.png', title: 'Weight Loss Journey', tag: 'Before → After', alt: 'Weight loss progress: before and after' },
     { src: '/facelift.png',   title: 'Facelift Result',     tag: 'Before → After', alt: 'Facelift result: before and after' },
     { src: '/beauty.png',     title: 'Creator Tutorial',    tag: 'Before → After', alt: 'Beauty tutorial creator, before and after' },
-  ];
+  ]), []);
 
   return (
     <PageLayout
@@ -95,18 +164,18 @@ export default function App() {
         </p>
         <div className="ba-cta-actions">
           <Link to="/projects" className="button primary">Start a project</Link>
-          {/* Was a disabled button; now a real link */}
           <Link to="/community" className="button ghost">Community Gallery</Link>
         </div>
       </section>
 
-      {/* Latest from Community */}
+      {/* Latest from Community (mixed singles + pairs) */}
       <section className="stack" style={{ marginTop: 16 }}>
         <h2>Latest from Community</h2>
-        {recentLoading ? (
+
+        {loading ? (
           <p>Loading…</p>
-        ) : recent.length === 0 ? (
-          <p>No public shares yet. Be the first to share from a project!</p>
+        ) : items.length === 0 ? (
+          <p>No public posts yet. Be the first to share!</p>
         ) : (
           <div
             className="grid"
@@ -116,36 +185,124 @@ export default function App() {
               gap: 16
             }}
           >
-            {recent.map((s) => (
-              <article className="card" key={s.slug}>
-                <Link to={`/s/${s.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                  {s.publicUrl && (
-                    <img
-                      src={s.publicUrl}
-                      alt={s.caption || 'Community share'}
-                      style={{
-                        width: '100%',
-                        height: 160,
-                        objectFit: 'cover',
-                        borderTopLeftRadius: 10,
-                        borderTopRightRadius: 10
-                      }}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  )}
-                  <div style={{ padding: 12 }}>
-                    <h3 style={{ margin: 0, fontSize: 16 }}>{s.caption || 'Untitled'}</h3>
-                    <small style={{ color: '#666' }}>
-                      {new Date(s.created_at).toLocaleString()}
-                    </small>
-                  </div>
-                </Link>
-              </article>
-            ))}
+            {items.map((it) => {
+              // Single-image card
+              if (it.type === 'single') {
+                return (
+                  <article className="card" key={it.key}>
+                    <Link to={it.href} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      {it.image?.src && (
+                        <img
+                          src={it.image.src}
+                          alt={it.image.alt}
+                          style={{
+                            width: '100%',
+                            height: 160,
+                            objectFit: 'cover',
+                            borderTopLeftRadius: 10,
+                            borderTopRightRadius: 10
+                          }}
+                          loading="lazy"
+                          decoding="async"
+                          onError={(e) => { e.currentTarget.src = ''; }}
+                        />
+                      )}
+                      <div style={{ padding: 12 }}>
+                        <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
+                        <small style={{ color: '#666' }}>
+                          {new Date(it.created_at).toLocaleString()}
+                        </small>
+                      </div>
+                    </Link>
+                  </article>
+                );
+              }
+
+              // Before/After pair card
+              const before = it.beforeUrl;
+              const after  = it.afterUrl;
+              return (
+                <article className="card" key={it.key}>
+                  <Link to={it.href} style={{ textDecoration: 'none', color: 'inherit' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                      {before && (
+                        <div style={{ position: 'relative' }}>
+                          <img
+                            src={before}
+                            alt="Before"
+                            style={{
+                              width: '100%',
+                              height: 160,
+                              objectFit: 'cover',
+                              borderTopLeftRadius: 10
+                            }}
+                            loading="lazy"
+                            decoding="async"
+                            onError={(e) => { e.currentTarget.src = ''; }}
+                          />
+                          <span
+                            style={{
+                              position: 'absolute',
+                              top: 8,
+                              left: 8,
+                              background: 'rgba(0,0,0,.65)',
+                              color: '#fff',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 12
+                            }}
+                          >
+                            Before
+                          </span>
+                        </div>
+                      )}
+                      {after && (
+                        <div style={{ position: 'relative' }}>
+                          <img
+                            src={after}
+                            alt="After"
+                            style={{
+                              width: '100%',
+                              height: 160,
+                              objectFit: 'cover',
+                              borderTopRightRadius: 10
+                            }}
+                            loading="lazy"
+                            decoding="async"
+                            onError={(e) => { e.currentTarget.src = ''; }}
+                          />
+                          <span
+                            style={{
+                              position: 'absolute',
+                              top: 8,
+                              left: 8,
+                              background: 'rgba(0,0,0,.65)',
+                              color: '#fff',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 12
+                            }}
+                          >
+                            After
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ padding: 12 }}>
+                      <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
+                      <small style={{ color: '#666' }}>
+                        {new Date(it.created_at).toLocaleString()}
+                      </small>
+                    </div>
+                  </Link>
+                </article>
+              );
+            })}
           </div>
         )}
-        {recent.length > 0 && (
+
+        {items.length > 0 && (
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
             <Link to="/community" className="button ghost">View all</Link>
           </div>
