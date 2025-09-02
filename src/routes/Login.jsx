@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
 
 export default function Login() {
   const nav = useNavigate();
+  const { search } = useLocation();
+  const qs = useMemo(() => new URLSearchParams(search), [search]);
 
   // 'signin' | 'signup'
   const [mode, setMode] = useState('signin');
@@ -13,6 +15,20 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
+
+  // If we were redirected from /auth/callback, surface a message and clear the query.
+  useEffect(() => {
+    const confirmed = qs.get('confirmed');
+    const errorMsg = qs.get('error');
+    if (confirmed) {
+      setMode('signin');
+      setNotice('Email confirmed — please sign in.');
+      nav('/login', { replace: true }); // strip query params
+    } else if (errorMsg) {
+      setErr(decodeURIComponent(errorMsg));
+      nav('/login', { replace: true });
+    }
+  }, [qs, nav]);
 
   // If already signed in, go to /projects. Also react to future logins.
   useEffect(() => {
@@ -40,14 +56,13 @@ export default function Login() {
           email,
           password,
           options: {
-            // After clicking the confirmation email, user will be sent here.
-            emailRedirectTo: `${window.location.origin}/projects`,
+            // Where the email confirmation link lands
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
         if (error) throw error;
 
         if (!data.session) {
-          // Most likely because "Confirm email" is ON in Supabase
           setNotice('Account created. Please check your email to confirm before logging in.');
         } else {
           setNotice('Account created and signed in.');
@@ -72,7 +87,7 @@ export default function Login() {
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email,
-        options: { emailRedirectTo: `${window.location.origin}/projects` },
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
       });
       if (error) throw error;
       setNotice('Confirmation email resent. Please check your inbox.');

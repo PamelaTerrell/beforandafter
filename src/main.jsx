@@ -9,21 +9,23 @@ import Project from './routes/Project.jsx';
 import Community from './routes/Community.jsx';
 import SharePage from './routes/SharePage.jsx';
 import MyShares from './routes/MyShares.jsx';
-import PairPage from './routes/PairPage.jsx'; // <-- make sure this path matches the file location
+import PairPage from './routes/PairPage.jsx';
+import AuthCallback from './routes/AuthCallback.jsx'; // <-- add this
 
 import './index.css';
 
 const router = createBrowserRouter([
   { path: '/', element: <App /> },
   { path: '/login', element: <Login /> },
+  { path: '/auth/callback', element: <AuthCallback /> }, // <-- user lands here from email
   { path: '/projects', element: <Projects /> },
   { path: '/projects/:id', element: <Project /> },
   { path: '/community', element: <Community /> },
   { path: '/s/:slug', element: <SharePage /> },
-  { path: '/p/:id', element: <PairPage /> },   // <-- fixed syntax + trailing comma
+  { path: '/p/:id', element: <PairPage /> }, // <-- only once
   { path: '/my-shares', element: <MyShares /> },
-{ path: '/p/:id', element: <PairPage /> },
 
+  // Optional: fallback
   { path: '*', element: <App /> },
 ]);
 
