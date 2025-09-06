@@ -21,6 +21,9 @@ export default function Login() {
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
 
+  // Detect if we're inside an in-app browser / embedded webview (Google blocks OAuth there)
+  const [inApp, setInApp] = useState(false);
+
   /* ---------------- Helpers ---------------- */
 
   function normalizeEmail(v) {
@@ -88,6 +91,28 @@ export default function Login() {
       subscription.unsubscribe();
     };
   }, [nav, nextPath]);
+
+  // Detect in-app browsers (LinkedIn/Instagram/FB/TikTok/etc) or generic webviews
+  useEffect(() => {
+    const ua = (navigator.userAgent || '').toLowerCase();
+
+    const isIOS = /iphone|ipad|ipod/.test(ua);
+    const isAndroid = /android/.test(ua);
+
+    // Known in-app browser signatures
+    const knownIAB =
+      /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(ua);
+
+    // Android WebView typically includes "wv"
+    const androidWV = isAndroid && /\bwv\b/.test(ua);
+
+    // iOS non-browser heuristics: not Safari/Chrome/Firefox/Edge/Opera
+    const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opios/.test(ua);
+    const isKnownIOSBrowser = /crios|fxios|edgios|opios/.test(ua) || isSafari;
+    const iosWebViewGuess = isIOS && !isKnownIOSBrowser; // many IABs report like this
+
+    setInApp(Boolean(knownIAB || androidWV || iosWebViewGuess));
+  }, []);
 
   /* ---------------- Handlers ---------------- */
 
@@ -195,12 +220,54 @@ export default function Login() {
   return (
     <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
       <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+        {/* In-app browser warning (e.g., LinkedIn / Instagram) */}
+        {inApp && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 12,
+              background: '#fff7e6',
+              border: '1px solid #ffd796',
+              padding: 12,
+              borderRadius: 10
+            }}
+          >
+            <strong>Heads up:</strong> Google sign-in is blocked inside this in-app browser.
+            <br />
+            Tap <em>•••</em> or the share icon and choose <b>Open in your browser</b> (Safari/Chrome), then try again.
+            <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="button ghost"
+                onClick={() => {
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(window.location.href);
+                    setNotice('Link copied — open it in your browser and sign in.');
+                  }
+                }}
+              >
+                Copy link
+              </button>
+              {navigator.share && (
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => navigator.share({ title: 'Before & After Vault', url: window.location.href })}
+                >
+                  Share…
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* --- OAuth block --- */}
         <button
           type="button"
           className="button"
           onClick={loginWithGoogle}
-          disabled={loading}
+          disabled={loading || inApp}
+          title={inApp ? 'Open in Safari/Chrome to use Google sign-in' : 'Continue with Google'}
           style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
           aria-label="Continue with Google"
         >
