@@ -7,25 +7,37 @@ import PageLayout from '../components/PageLayout';
 const COMMUNITY_BUCKET = 'community'; // single-image shares (public)
 const MEDIA_BUCKET = 'media';         // before/after pairs (private)
 const HOMEPAGE_LIMIT = 8;
+const SIGNED_URL_TTL = 60 * 60 * 24 * 7; // 7 days
 
 /* ---------- URL helpers ---------- */
 
 // Community bucket is public: a simple public URL is fine
 function publicUrl(bucket, path) {
+  if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl || null;
 }
 
-// Media bucket is private: ALWAYS sign (no public URL attempt)
-async function resolveMediaUrl(path) {
-  if (!path) return null;
-  try {
-    const { data, error } = await supabase.storage
-      .from(MEDIA_BUCKET)
-      .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
-    if (!error) return data?.signedUrl || null;
-  } catch {}
-  return null;
+// Batch sign many media paths at once (fewer requests = faster)
+async function resolveMediaUrls(paths) {
+  const clean = paths.filter(Boolean);
+  if (clean.length === 0) return new Map();
+  const { data, error } = await supabase
+    .storage
+    .from(MEDIA_BUCKET)
+    .createSignedUrls(clean, SIGNED_URL_TTL);
+
+  if (error) {
+    console.error('[Home] createSignedUrls error:', error);
+    return new Map();
+  }
+
+  const map = new Map();
+  data?.forEach((d, i) => {
+    const key = clean[i];
+    map.set(key, d?.signedUrl ?? null);
+  });
+  return map;
 }
 
 // Normalize single-image "shares" row
@@ -44,7 +56,7 @@ function mapShareRow(row) {
   };
 }
 
-// Normalize before/after pair; we’ll resolve URLs after
+// Normalize before/after pair; URLs filled after signing
 function mapPairRow(row) {
   return {
     key: `pair:${row.id}`,
@@ -55,6 +67,8 @@ function mapPairRow(row) {
     href: `/p/${row.id}`,
     before_path: row.before_path,
     after_path: row.after_path,
+    beforeUrl: null,
+    afterUrl: null,
   };
 }
 
@@ -63,63 +77,93 @@ export default function App() {
   const [items, setItems] = useState([]); // mixed list (singles + pairs)
   const [loading, setLoading] = useState(true);
 
+  // pretty date formatter (locale-aware)
+  const fmt = useMemo(
+    () => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+    []
+  );
+
   // auth badge
   useEffect(() => {
+    let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
-      setEmail(data.session?.user?.email ?? null);
+      if (mounted) setEmail(data.session?.user?.email ?? null);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
       setEmail(session?.user?.email ?? null);
     });
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Fetch both feeds, merge, sort, slice
   useEffect(() => {
+    const ac = new AbortController();
+
     (async () => {
-      setLoading(true);
+      try {
+        setLoading(true);
 
-      // 1) Latest single-image shares
-      const { data: shares, error: sharesErr } = await supabase
-        .from('shares')
-        .select('slug, caption, media_path, created_at')
-        .eq('is_public', true)
-        .order('created_at', { ascending: false })
-        .limit(HOMEPAGE_LIMIT);
-      if (sharesErr) console.error('[Home] shares error:', sharesErr);
-      const mappedShares = (shares || []).map(mapShareRow);
+        // 1) Latest single-image shares
+        const { data: shares, error: sharesErr } = await supabase
+          .from('shares')
+          .select('slug, caption, media_path, created_at')
+          .eq('is_public', true)
+          .order('created_at', { ascending: false })
+          .limit(HOMEPAGE_LIMIT);
 
-      // 2) Latest before/after pairs (public)
-      const { data: pairs, error: pairsErr } = await supabase
-        .from('before_after_pairs')
-        .select('id, caption, before_path, after_path, created_at, is_public')
-        .eq('is_public', true)
-        .order('created_at', { ascending: false })
-        .limit(HOMEPAGE_LIMIT);
-      if (pairsErr) console.error('[Home] pairs error:', pairsErr);
+        if (ac.signal.aborted) return;
+        if (sharesErr) console.error('[Home] shares error:', sharesErr);
+        const mappedShares = (shares || []).map(mapShareRow);
 
-      // Resolve signed URLs for media (private bucket)
-      const mappedPairs = await Promise.all(
-        (pairs || []).map(async (row) => {
-          const base = mapPairRow(row);
-          const [beforeUrl, afterUrl] = await Promise.all([
-            resolveMediaUrl(row.before_path),
-            resolveMediaUrl(row.after_path),
-          ]);
-          return { ...base, beforeUrl, afterUrl };
-        })
-      );
+        // 2) Latest before/after pairs (public)
+        const { data: pairs, error: pairsErr } = await supabase
+          .from('before_after_pairs')
+          .select('id, caption, before_path, after_path, created_at, is_public')
+          .eq('is_public', true)
+          .order('created_at', { ascending: false })
+          .limit(HOMEPAGE_LIMIT);
 
-      // Optional safety: drop pairs where neither URL resolved (old rows with dead paths)
-      const cleanedPairs = mappedPairs.filter(p => p.beforeUrl || p.afterUrl);
+        if (ac.signal.aborted) return;
+        if (pairsErr) console.error('[Home] pairs error:', pairsErr);
 
-      // 3) Merge + sort by created_at desc, keep HOMEPAGE_LIMIT
-      const merged = [...mappedShares, ...cleanedPairs].sort(
-        (a, b) => new Date(b.created_at) - new Date(a.created_at)
-      );
-      setItems(merged.slice(0, HOMEPAGE_LIMIT));
-      setLoading(false);
+        const mappedPairs = (pairs || []).map(mapPairRow);
+
+        // Batch sign all before/after paths in one go
+        const allPaths = mappedPairs.flatMap(p => [p.before_path, p.after_path]).filter(Boolean);
+        const signedMap = await resolveMediaUrls(allPaths);
+
+        if (ac.signal.aborted) return;
+
+        // Attach signed URLs & drop pairs with no resolvable media
+        const cleanedPairs = mappedPairs
+          .map(p => ({
+            ...p,
+            beforeUrl: p.before_path ? signedMap.get(p.before_path) ?? null : null,
+            afterUrl:  p.after_path  ? signedMap.get(p.after_path)  ?? null : null,
+          }))
+          .filter(p => p.beforeUrl || p.afterUrl);
+
+        // 3) Merge + sort by created_at desc, keep HOMEPAGE_LIMIT
+        const merged = [...mappedShares, ...cleanedPairs].sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+
+        if (!ac.signal.aborted) {
+          setItems(merged.slice(0, HOMEPAGE_LIMIT));
+          setLoading(false);
+        }
+      } catch (e) {
+        if (!ac.signal.aborted) {
+          console.error('[Home] load error:', e);
+          setLoading(false);
+        }
+      }
     })();
+
+    return () => ac.abort();
   }, []);
 
   const gallery = useMemo(() => ([
@@ -144,7 +188,12 @@ export default function App() {
           {gallery.map((item) => (
             <figure className="card ba-card" key={item.src}>
               <div className="ba-media">
-                <img src={item.src} alt={item.alt} loading="lazy" decoding="async" />
+                <img
+                  src={item.src}
+                  alt={item.alt || item.title}
+                  loading="lazy"
+                  decoding="async"
+                />
               </div>
               <figcaption className="ba-caption">
                 <strong>{item.title}</strong>
@@ -191,10 +240,10 @@ export default function App() {
                 return (
                   <article className="card" key={it.key}>
                     <Link to={it.href} style={{ textDecoration: 'none', color: 'inherit' }}>
-                      {it.image?.src && (
+                      {it.image?.src ? (
                         <img
                           src={it.image.src}
-                          alt={it.image.alt}
+                          alt={it.image.alt || it.caption}
                           style={{
                             width: '100%',
                             height: 160,
@@ -204,13 +253,13 @@ export default function App() {
                           }}
                           loading="lazy"
                           decoding="async"
-                          onError={(e) => { e.currentTarget.src = ''; }}
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
                         />
-                      )}
+                      ) : null}
                       <div style={{ padding: 12 }}>
                         <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
                         <small style={{ color: '#666' }}>
-                          {new Date(it.created_at).toLocaleString()}
+                          {fmt.format(new Date(it.created_at))}
                         </small>
                       </div>
                     </Link>
@@ -238,7 +287,7 @@ export default function App() {
                             }}
                             loading="lazy"
                             decoding="async"
-                            onError={(e) => { e.currentTarget.src = ''; }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
                           />
                           <span
                             style={{
@@ -269,7 +318,7 @@ export default function App() {
                             }}
                             loading="lazy"
                             decoding="async"
-                            onError={(e) => { e.currentTarget.src = ''; }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
                           />
                           <span
                             style={{
@@ -292,7 +341,7 @@ export default function App() {
                     <div style={{ padding: 12 }}>
                       <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
                       <small style={{ color: '#666' }}>
-                        {new Date(it.created_at).toLocaleString()}
+                        {fmt.format(new Date(it.created_at))}
                       </small>
                     </div>
                   </Link>
