@@ -155,7 +155,7 @@ export default function Login() {
     }
   }
 
-  // Google OAuth sign-in (no querystring on redirectTo; store next in localStorage)
+  // Google OAuth sign-in — always show account picker
   async function loginWithGoogle() {
     try {
       setLoading(true);
@@ -169,7 +169,10 @@ export default function Login() {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          // queryParams: { prompt: 'consent', access_type: 'offline' }, // optional
+          queryParams: {
+            prompt: 'select_account' // always show the account chooser
+            // If you also want to re-consent each time: 'consent select_account'
+          },
         },
       });
 
