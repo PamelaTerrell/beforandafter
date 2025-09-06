@@ -21,7 +21,7 @@ export default function Login() {
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  // Detect if we're inside an in-app browser / embedded webview (Google blocks OAuth there)
+  // Detect likely in-app browsers (LinkedIn/Instagram/etc)
   const [inApp, setInApp] = useState(false);
 
   /* ---------------- Helpers ---------------- */
@@ -62,21 +62,19 @@ export default function Login() {
 
   /* ---------------- Effects ---------------- */
 
-  // If we were redirected from /auth/callback, surface a message and clear the query.
   useEffect(() => {
     const confirmed = qs.get('confirmed');
     const errorMsg = qs.get('error');
     if (confirmed) {
       setMode('signin');
       setNotice('Email confirmed — please sign in.');
-      nav('/login', { replace: true }); // strip query params
+      nav('/login', { replace: true });
     } else if (errorMsg) {
       setErr(decodeURIComponent(errorMsg));
       nav('/login', { replace: true });
     }
   }, [qs, nav]);
 
-  // If already signed in, go to nextPath. Also react to future logins.
   useEffect(() => {
     let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
@@ -92,22 +90,16 @@ export default function Login() {
     };
   }, [nav, nextPath]);
 
-  // Detect in-app browsers (LinkedIn/Instagram/FB/TikTok/etc) or generic webviews
   useEffect(() => {
     const ua = (navigator.userAgent || '').toLowerCase();
-
     const isIOS = /iphone|ipad|ipod/.test(ua);
     const isAndroid = /android/.test(ua);
-
     const knownIAB =
       /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(ua);
-
     const androidWV = isAndroid && /\bwv\b/.test(ua);
-
     const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opios/.test(ua);
     const isKnownIOSBrowser = /crios|fxios|edgios|opios/.test(ua) || isSafari;
     const iosWebViewGuess = isIOS && !isKnownIOSBrowser;
-
     setInApp(Boolean(knownIAB || androidWV || iosWebViewGuess));
   }, []);
 
@@ -176,17 +168,42 @@ export default function Login() {
     }
   }
 
-  // Google OAuth sign-in — tries to break out of in-app browsers automatically
-  async function loginWithGoogle() {
+  // Magic Link fallback (works in in-app browsers)
+  async function loginWithMagicLink() {
     try {
       setLoading(true);
       setErr(null);
       setNotice(null);
 
+      const eNorm = normalizeEmail(email);
+      if (!eNorm) {
+        setErr('Enter your email above to receive a magic link.');
+        return;
+      }
+      localStorage.setItem('oauthNext', nextPath);
+
+      const { error } = await supabase.auth.signInWithOtp({
+        email: eNorm,
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      });
+      if (error) throw error;
+      setNotice('Magic link sent! Check your email.');
+    } catch (e) {
+      setErr(friendlyError(e?.message));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Google OAuth — try to break out of in-app browser automatically
+  async function loginWithGoogle() {
+    try {
+      setLoading(true);
+      setErr(null);
+      setNotice(null);
       localStorage.setItem('oauthNext', nextPath);
 
       if (inApp) {
-        // Get the OAuth URL without auto-redirecting…
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
@@ -197,8 +214,7 @@ export default function Login() {
         });
         if (error) throw error;
 
-        // …then attempt to open it in a new tab/window
-        // Many in-app browsers will hand this off to the system browser.
+        // attempt to open the OAuth URL in a new tab (often exits to Safari/Chrome)
         const a = document.createElement('a');
         a.href = data?.url || `${window.location.origin}/login`;
         a.target = '_blank';
@@ -207,17 +223,16 @@ export default function Login() {
         a.click();
         document.body.removeChild(a);
 
-        // Fallback: if we didn't leave this view, show a tiny hint
+        // If we didn’t leave this view, give a tiny, unobtrusive hint
         setTimeout(() => {
           if (document.visibilityState === 'visible') {
             setNotice('Open this page in your browser (Safari/Chrome) to continue with Google.');
           }
         }, 1200);
-
-        return; // don't proceed with normal redirect in the in-app view
+        return;
       }
 
-      // Normal browsers: just go
+      // Normal browsers
       const { error: err2 } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -251,13 +266,28 @@ export default function Login() {
           disabled={loading}
           style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
           aria-label="Continue with Google"
+          title="Continue with Google"
         >
-          {/* Simple inline Google 'G' */}
           <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
             <path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37 16.3 37 10 30.7 10 23S16.3 9 24 9c3.7 0 7.1 1.3 9.7 3.8l6-6C35.8 3.5 30.3 1 24 1 11.8 1 2 10.8 2 23s9.8 22 22 22c12.7 0 21-8.9 21-21 0-1.4-.1-2.3-.5-4z" />
           </svg>
           Continue with Google
         </button>
+
+        {/* Show Magic Link only when in an in-app browser */}
+        {inApp && (
+          <button
+            type="button"
+            className="button ghost"
+            onClick={loginWithMagicLink}
+            disabled={loading}
+            style={{ width: '100%', marginTop: 8 }}
+            aria-label="Send me a magic link"
+            title="Send me a magic link"
+          >
+            Send me a magic link
+          </button>
+        )}
 
         <div style={{ textAlign: 'center', margin: '12px 0', color: '#888' }}>
           <small>or use email</small>
@@ -303,15 +333,10 @@ export default function Login() {
         {err && <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">{err}</p>}
         {notice && <p style={{ color: 'seagreen', marginTop: 8 }} aria-live="polite">{notice}</p>}
 
-        {/* Contextual help actions (only when relevant) */}
+        {/* Contextual help actions */}
         {showContextPanel && (
           <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="button"
-              onClick={() => setMode('signin')}
-              title="Go to sign in"
-            >
+            <button type="button" className="button" onClick={() => setMode('signin')}>
               Go to sign in
             </button>
             <button
@@ -329,12 +354,7 @@ export default function Login() {
             >
               Forgot password?
             </button>
-            <button
-              type="button"
-              className="button ghost"
-              onClick={resendConfirmation}
-              title="Resend confirmation"
-            >
+            <button type="button" className="button ghost" onClick={resendConfirmation}>
               Resend confirmation
             </button>
           </div>
