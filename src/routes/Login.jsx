@@ -99,17 +99,14 @@ export default function Login() {
     const isIOS = /iphone|ipad|ipod/.test(ua);
     const isAndroid = /android/.test(ua);
 
-    // Known in-app browser signatures
     const knownIAB =
       /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(ua);
 
-    // Android WebView typically includes "wv"
     const androidWV = isAndroid && /\bwv\b/.test(ua);
 
-    // iOS non-browser heuristics: not Safari/Chrome/Firefox/Edge/Opera
     const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opios/.test(ua);
     const isKnownIOSBrowser = /crios|fxios|edgios|opios/.test(ua) || isSafari;
-    const iosWebViewGuess = isIOS && !isKnownIOSBrowser; // many IABs report like this
+    const iosWebViewGuess = isIOS && !isKnownIOSBrowser;
 
     setInApp(Boolean(knownIAB || androidWV || iosWebViewGuess));
   }, []);
@@ -127,7 +124,6 @@ export default function Login() {
       if (mode === 'signin') {
         const { error } = await supabase.auth.signInWithPassword({ email: eNorm, password });
         if (error) throw error;
-        // onAuthStateChange will navigate
       } else {
         const { data, error } = await supabase.auth.signUp({
           email: eNorm,
@@ -140,7 +136,7 @@ export default function Login() {
           if (kind === 'already_registered') {
             setMode('signin');
             setNotice('Looks like this email already has an account. Please sign in below.');
-            return; // stop here; user will sign in or use helpers
+            return;
           }
           throw error;
         }
@@ -180,29 +176,56 @@ export default function Login() {
     }
   }
 
-  // Google OAuth sign-in — always show account picker
+  // Google OAuth sign-in — tries to break out of in-app browsers automatically
   async function loginWithGoogle() {
     try {
       setLoading(true);
       setErr(null);
       setNotice(null);
 
-      // Stash intended destination so AuthCallback can route correctly
       localStorage.setItem('oauthNext', nextPath);
 
-      const { error } = await supabase.auth.signInWithOAuth({
+      if (inApp) {
+        // Get the OAuth URL without auto-redirecting…
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: `${window.location.origin}/auth/callback`,
+            queryParams: { prompt: 'select_account' },
+            skipBrowserRedirect: true,
+          },
+        });
+        if (error) throw error;
+
+        // …then attempt to open it in a new tab/window
+        // Many in-app browsers will hand this off to the system browser.
+        const a = document.createElement('a');
+        a.href = data?.url || `${window.location.origin}/login`;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        // Fallback: if we didn't leave this view, show a tiny hint
+        setTimeout(() => {
+          if (document.visibilityState === 'visible') {
+            setNotice('Open this page in your browser (Safari/Chrome) to continue with Google.');
+          }
+        }, 1200);
+
+        return; // don't proceed with normal redirect in the in-app view
+      }
+
+      // Normal browsers: just go
+      const { error: err2 } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: {
-            prompt: 'select_account' // always show the account chooser
-            // If you also want to re-consent each time: 'consent select_account'
-          },
+          queryParams: { prompt: 'select_account' },
         },
       });
-
-      if (error) throw error;
-      // Redirects to Google; flow continues on /auth/callback
+      if (err2) throw err2;
     } catch (e) {
       setErr(friendlyError(e?.message));
     } finally {
@@ -220,54 +243,12 @@ export default function Login() {
   return (
     <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
       <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
-        {/* In-app browser warning (e.g., LinkedIn / Instagram) */}
-        {inApp && (
-          <div
-            className="card"
-            style={{
-              marginBottom: 12,
-              background: '#fff7e6',
-              border: '1px solid #ffd796',
-              padding: 12,
-              borderRadius: 10
-            }}
-          >
-            <strong>Heads up:</strong> Google sign-in is blocked inside this in-app browser.
-            <br />
-            Tap <em>•••</em> or the share icon and choose <b>Open in your browser</b> (Safari/Chrome), then try again.
-            <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="button ghost"
-                onClick={() => {
-                  if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(window.location.href);
-                    setNotice('Link copied — open it in your browser and sign in.');
-                  }
-                }}
-              >
-                Copy link
-              </button>
-              {navigator.share && (
-                <button
-                  type="button"
-                  className="button"
-                  onClick={() => navigator.share({ title: 'Before & After Vault', url: window.location.href })}
-                >
-                  Share…
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* --- OAuth block --- */}
         <button
           type="button"
           className="button"
           onClick={loginWithGoogle}
-          disabled={loading || inApp}
-          title={inApp ? 'Open in Safari/Chrome to use Google sign-in' : 'Continue with Google'}
+          disabled={loading}
           style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
           aria-label="Continue with Google"
         >
@@ -371,7 +352,6 @@ export default function Login() {
               setMode(nextMode);
               setErr(null);
               setNotice(null);
-              // keep mode reflected in URL for deep-linking
               const url = new URL(window.location.href);
               url.searchParams.set('mode', nextMode);
               window.history.replaceState({}, '', url.toString());
