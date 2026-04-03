@@ -10,7 +10,8 @@ import Community from './routes/Community.jsx';
 import SharePage from './routes/SharePage.jsx';
 import MyShares from './routes/MyShares.jsx';
 import PairPage from './routes/PairPage.jsx';
-import AuthCallback from './routes/AuthCallback.jsx'; // <-- add this
+import AuthCallback from './routes/AuthCallback.jsx';
+import ResetPassword from './routes/ResetPassword.jsx';
 
 import './index.css';
 
@@ -24,6 +25,7 @@ const router = createBrowserRouter([
   { path: '/s/:slug', element: <SharePage /> },
   { path: '/p/:id', element: <PairPage /> }, // <-- only once
   { path: '/my-shares', element: <MyShares /> },
+  { path: '/reset-password', element: <ResetPassword /> },
 
   // Optional: fallback
   { path: '*', element: <App /> },
