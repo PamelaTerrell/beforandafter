@@ -1,3 +1,4 @@
+// src/routes/Login.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -8,7 +9,6 @@ export default function Login() {
   const { search } = useLocation();
   const qs = useMemo(() => new URLSearchParams(search), [search]);
 
-  // Support /login?next=/p/123 and /login?mode=signup
   const nextPath = qs.get('next') || '/projects';
   const qsMode = qs.get('mode');
   const [mode, setMode] = useState(qsMode === 'signup' ? 'signup' : 'signin');
@@ -20,7 +20,6 @@ export default function Login() {
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  // Detect likely in-app browsers (LinkedIn/Instagram/etc)
   const [inApp, setInApp] = useState(false);
 
   /* ---------------- Helpers ---------------- */
@@ -33,48 +32,15 @@ export default function Login() {
     if (!message) return 'Authentication error';
     const m = message.toLowerCase();
 
-    if (m.includes('email not confirmed')) {
-      return 'Please confirm your email before signing in.';
-    }
-
-    if (m.includes('user already registered') || m.includes('user already exists')) {
-      return 'An account with this email already exists. Try logging in instead.';
-    }
-
-    if (m.includes('invalid login')) {
-      return 'Invalid email or password.';
-    }
-
-    if (m.includes('rate limit')) {
-      return 'Too many attempts. Please wait a moment and try again.';
-    }
-
-    if (m.includes('expired') || m.includes('invalid or expired')) {
-      return 'That link expired. Try again.';
-    }
-
+    if (m.includes('invalid login')) return 'Invalid email or password.';
+    if (m.includes('already exists')) return 'An account with this email already exists.';
+    if (m.includes('rate limit')) return 'Too many attempts. Please wait and try again.';
     return message;
-  }
-
-  function classifyAuthError(message = '') {
-    const m = message.toLowerCase();
-    if (m.includes('already registered') || m.includes('already exists')) {
-      return 'already_registered';
-    }
-    if (m.includes('email not confirmed')) {
-      return 'email_not_confirmed';
-    }
-    if (m.includes('invalid login')) {
-      return 'invalid_login';
-    }
-    return 'generic';
   }
 
   async function sendPasswordReset(targetEmail) {
     const eNorm = normalizeEmail(targetEmail || email);
-    if (!eNorm) {
-      throw new Error('Enter your email above first.');
-    }
+    if (!eNorm) throw new Error('Enter your email above first.');
 
     const { error } = await supabase.auth.resetPasswordForEmail(eNorm, {
       redirectTo: `${window.location.origin}/auth/callback`,
@@ -86,14 +52,8 @@ export default function Login() {
   /* ---------------- Effects ---------------- */
 
   useEffect(() => {
-    const confirmed = qs.get('confirmed');
     const errorMsg = qs.get('error');
-
-    if (confirmed) {
-      setMode('signin');
-      setNotice('Email confirmed — please sign in.');
-      nav('/login', { replace: true });
-    } else if (errorMsg) {
+    if (errorMsg) {
       setErr(decodeURIComponent(errorMsg));
       nav('/login', { replace: true });
     }
@@ -120,19 +80,10 @@ export default function Login() {
   }, [nav, nextPath]);
 
   useEffect(() => {
-    const ua = (navigator.userAgent || '').toLowerCase();
-    const isIOS = /iphone|ipad|ipod/.test(ua);
-    const isAndroid = /android/.test(ua);
-    const knownIAB =
-      /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(
-        ua
-      );
-    const androidWV = isAndroid && /\bwv\b/.test(ua);
-    const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opios/.test(ua);
-    const isKnownIOSBrowser = /crios|fxios|edgios|opios/.test(ua) || isSafari;
-    const iosWebViewGuess = isIOS && !isKnownIOSBrowser;
-
-    setInApp(Boolean(knownIAB || androidWV || iosWebViewGuess));
+    const ua = navigator.userAgent.toLowerCase();
+    const isInApp =
+      /(fbav|instagram|linkedinapp|tiktok|snapchat|micromessenger)/i.test(ua);
+    setInApp(isInApp);
   }, []);
 
   /* ---------------- Handlers ---------------- */
@@ -151,70 +102,24 @@ export default function Login() {
           email: eNorm,
           password,
         });
-
         if (error) throw error;
       } else {
-        const { data, error } = await supabase.auth.signUp({
+        const { error } = await supabase.auth.signUp({
           email: eNorm,
           password,
-          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
         });
 
-        if (error) {
-          const kind = classifyAuthError(error.message);
+        if (error) throw error;
 
-          if (kind === 'already_registered') {
-            setMode('signin');
-            setNotice('Looks like this email already has an account. Please sign in below.');
-            return;
-          }
-
-          throw error;
-        }
-
-        if (!data.session) {
-          setNotice(
-            'Check your email for a confirmation link. If it does not arrive, try resending confirmation or logging in.'
-          );
-        } else {
-          setNotice('Account created and signed in.');
-        }
+        setNotice('Account created. You are now signed in.');
       }
     } catch (e) {
-      setErr(friendlyError(e?.message));
-      console.error(e);
+      setErr(friendlyError(e.message));
     } finally {
       setLoading(false);
     }
   }
 
-  async function resendConfirmation() {
-    setErr(null);
-    setNotice(null);
-
-    try {
-      const eNorm = normalizeEmail(email);
-
-      if (!eNorm) {
-        setErr('Enter your email above, then click Resend.');
-        return;
-      }
-
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: eNorm,
-        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-      });
-
-      if (error) throw error;
-
-      setNotice('Confirmation email resent. Please check your inbox.');
-    } catch (e) {
-      setErr(friendlyError(e?.message));
-    }
-  }
-
-  // Magic Link fallback (works in in-app browsers)
   async function loginWithMagicLink() {
     try {
       setLoading(true);
@@ -222,13 +127,10 @@ export default function Login() {
       setNotice(null);
 
       const eNorm = normalizeEmail(email);
-
       if (!eNorm) {
-        setErr('Enter your email above to receive a magic link.');
+        setErr('Enter your email above.');
         return;
       }
-
-      localStorage.setItem('oauthNext', nextPath);
 
       const { error } = await supabase.auth.signInWithOtp({
         email: eNorm,
@@ -237,62 +139,30 @@ export default function Login() {
 
       if (error) throw error;
 
-      setNotice('Magic link sent! Check your email.');
+      setNotice('Magic link sent. Check your email.');
     } catch (e) {
-      setErr(friendlyError(e?.message));
+      setErr(friendlyError(e.message));
     } finally {
       setLoading(false);
     }
   }
 
-  // Google OAuth — try to break out of in-app browser automatically
   async function loginWithGoogle() {
     try {
       setLoading(true);
       setErr(null);
       setNotice(null);
-      localStorage.setItem('oauthNext', nextPath);
 
-      if (inApp) {
-        const { data, error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: `${window.location.origin}/auth/callback`,
-            queryParams: { prompt: 'select_account' },
-            skipBrowserRedirect: true,
-          },
-        });
-
-        if (error) throw error;
-
-        const a = document.createElement('a');
-        a.href = data?.url || `${window.location.origin}/login`;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        setTimeout(() => {
-          if (document.visibilityState === 'visible') {
-            setNotice('Open this page in your browser (Safari/Chrome) to continue with Google.');
-          }
-        }, 1200);
-
-        return;
-      }
-
-      const { error: err2 } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: { prompt: 'select_account' },
         },
       });
 
-      if (err2) throw err2;
+      if (error) throw error;
     } catch (e) {
-      setErr(friendlyError(e?.message));
+      setErr(friendlyError(e.message));
     } finally {
       setLoading(false);
     }
@@ -300,32 +170,19 @@ export default function Login() {
 
   /* ---------------- UI ---------------- */
 
-  const canSubmit = email.trim() && password.length >= 6 && !loading;
-
-  const showContextPanel =
-    (notice &&
-      (
-        notice.toLowerCase().includes('already has an account') ||
-        notice.toLowerCase().includes('check your email') ||
-        notice.toLowerCase().includes('confirm')
-      )) ||
-    (err && err.toLowerCase().includes('confirm your email'));
+  const canSubmit = email && password.length >= 6 && !loading;
 
   return (
     <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
       <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+
         <button
           type="button"
           className="button"
           onClick={loginWithGoogle}
           disabled={loading}
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-          aria-label="Continue with Google"
-          title="Continue with Google"
+          style={{ width: '100%' }}
         >
-          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-            <path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37 16.3 37 10 30.7 10 23S16.3 9 24 9c3.7 0 7.1 1.3 9.7 3.8l6-6C35.8 3.5 30.3 1 24 1 11.8 1 2 10.8 2 23s9.8 22 22 22c12.7 0 21-8.9 21-21 0-1.4-.1-2.3-.5-4z" />
-          </svg>
           Continue with Google
         </button>
 
@@ -336,10 +193,8 @@ export default function Login() {
             onClick={loginWithMagicLink}
             disabled={loading}
             style={{ width: '100%', marginTop: 8 }}
-            aria-label="Send me a magic link"
-            title="Send me a magic link"
           >
-            Send me a magic link
+            Email me a sign-in link
           </button>
         )}
 
@@ -347,117 +202,64 @@ export default function Login() {
           <small>or use email</small>
         </div>
 
-        <label htmlFor="email">Email</label>
+        <label>Email</label>
         <input
-          id="email"
           className="input"
           type="email"
-          autoComplete="email"
-          inputMode="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
         />
 
-        <label htmlFor="pw" style={{ marginTop: 8 }}>
-          Password
-        </label>
-        <div className="row" style={{ gap: 8 }}>
+        <label style={{ marginTop: 8 }}>Password</label>
+        <div className="row">
           <input
-            id="pw"
             className="input"
             type={showPw ? 'text' : 'password'}
-            autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            minLength={6}
             style={{ flex: 1 }}
           />
-          <button
-            type="button"
-            className="button ghost"
-            aria-pressed={showPw}
-            onClick={() => setShowPw((s) => !s)}
-            title={showPw ? 'Hide password' : 'Show password'}
-          >
+          <button type="button" onClick={() => setShowPw(s => !s)}>
             {showPw ? 'Hide' : 'Show'}
           </button>
         </div>
 
-        {err && (
-          <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">
-            {err}
-          </p>
-        )}
+        {err && <p style={{ color: 'crimson' }}>{err}</p>}
+        {notice && <p style={{ color: 'seagreen' }}>{notice}</p>}
 
-        {notice && (
-          <p style={{ color: 'seagreen', marginTop: 8 }} aria-live="polite">
-            {notice}
-          </p>
-        )}
-
-        {showContextPanel && (
-          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="button"
-              onClick={() => {
-                setMode('signin');
-                setErr(null);
-              }}
-            >
-              Go to sign in
-            </button>
-
-            <button
-              type="button"
-              className="button ghost"
-              onClick={async () => {
-                try {
-                  await sendPasswordReset(email);
-                  setNotice('Password reset email sent. Check your inbox.');
-                  setErr(null);
-                } catch (e) {
-                  setErr(friendlyError(e?.message));
-                }
-              }}
-            >
-              Forgot password?
-            </button>
-
-            <button type="button" className="button ghost" onClick={resendConfirmation}>
-              Resend confirmation
-            </button>
-          </div>
-        )}
+        <div style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={async () => {
+              try {
+                await sendPasswordReset(email);
+                setNotice('Password reset email sent.');
+              } catch (e) {
+                setErr(friendlyError(e.message));
+              }
+            }}
+          >
+            Forgot password?
+          </button>
+        </div>
 
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="button primary" type="submit" disabled={!canSubmit}>
+          <button className="button primary" disabled={!canSubmit}>
             {loading ? 'Please wait…' : mode === 'signin' ? 'Log in' : 'Sign up'}
           </button>
 
           <button
             type="button"
             className="button ghost"
-            onClick={() => {
-              const nextMode = mode === 'signin' ? 'signup' : 'signin';
-              setMode(nextMode);
-              setErr(null);
-              setNotice(null);
-
-              const url = new URL(window.location.href);
-              url.searchParams.set('mode', nextMode);
-              window.history.replaceState({}, '', url.toString());
-            }}
+            onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
           >
             {mode === 'signin' ? 'Create account' : 'Have an account? Log in'}
           </button>
         </div>
 
-        <small style={{ display: 'block', marginTop: 10, color: '#666' }}>
-          Tip: If you don’t see the confirmation, check Spam/Promotions.
-        </small>
       </form>
     </PageLayout>
   );
