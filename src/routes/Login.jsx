@@ -1,4 +1,3 @@
-// src/routes/Login.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -33,30 +32,54 @@ export default function Login() {
   function friendlyError(message) {
     if (!message) return 'Authentication error';
     const m = message.toLowerCase();
-    if (m.includes('email not confirmed')) return 'Please confirm your email before signing in.';
+
+    if (m.includes('email not confirmed')) {
+      return 'Please confirm your email before signing in.';
+    }
+
     if (m.includes('user already registered') || m.includes('user already exists')) {
       return 'An account with this email already exists. Try logging in instead.';
     }
-    if (m.includes('invalid login')) return 'Invalid email or password.';
-    if (m.includes('rate limit')) return 'Too many attempts. Please wait a moment and try again.';
-    if (m.includes('expired') || m.includes('invalid or expired')) return 'That link expired. Try again.';
+
+    if (m.includes('invalid login')) {
+      return 'Invalid email or password.';
+    }
+
+    if (m.includes('rate limit')) {
+      return 'Too many attempts. Please wait a moment and try again.';
+    }
+
+    if (m.includes('expired') || m.includes('invalid or expired')) {
+      return 'That link expired. Try again.';
+    }
+
     return message;
   }
 
   function classifyAuthError(message = '') {
     const m = message.toLowerCase();
-    if (m.includes('already registered') || m.includes('already exists')) return 'already_registered';
-    if (m.includes('email not confirmed')) return 'email_not_confirmed';
-    if (m.includes('invalid login')) return 'invalid_login';
+    if (m.includes('already registered') || m.includes('already exists')) {
+      return 'already_registered';
+    }
+    if (m.includes('email not confirmed')) {
+      return 'email_not_confirmed';
+    }
+    if (m.includes('invalid login')) {
+      return 'invalid_login';
+    }
     return 'generic';
   }
 
   async function sendPasswordReset(targetEmail) {
     const eNorm = normalizeEmail(targetEmail || email);
-    if (!eNorm) throw new Error('Enter your email above first.');
+    if (!eNorm) {
+      throw new Error('Enter your email above first.');
+    }
+
     const { error } = await supabase.auth.resetPasswordForEmail(eNorm, {
       redirectTo: `${window.location.origin}/auth/callback`,
     });
+
     if (error) throw error;
   }
 
@@ -65,6 +88,7 @@ export default function Login() {
   useEffect(() => {
     const confirmed = qs.get('confirmed');
     const errorMsg = qs.get('error');
+
     if (confirmed) {
       setMode('signin');
       setNotice('Email confirmed — please sign in.');
@@ -77,13 +101,18 @@ export default function Login() {
 
   useEffect(() => {
     let mounted = true;
+
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       if (data.session) nav(nextPath, { replace: true });
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_e, session) => {
       if (session) nav(nextPath, { replace: true });
     });
+
     return () => {
       mounted = false;
       subscription.unsubscribe();
@@ -95,11 +124,14 @@ export default function Login() {
     const isIOS = /iphone|ipad|ipod/.test(ua);
     const isAndroid = /android/.test(ua);
     const knownIAB =
-      /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(ua);
+      /(fbav|fban|fb_iab|instagram|linkedinapp|snapchat|tiktok|micromessenger|line|pinterest|twitter)/i.test(
+        ua
+      );
     const androidWV = isAndroid && /\bwv\b/.test(ua);
     const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opios/.test(ua);
     const isKnownIOSBrowser = /crios|fxios|edgios|opios/.test(ua) || isSafari;
     const iosWebViewGuess = isIOS && !isKnownIOSBrowser;
+
     setInApp(Boolean(knownIAB || androidWV || iosWebViewGuess));
   }, []);
 
@@ -110,11 +142,16 @@ export default function Login() {
     setLoading(true);
     setErr(null);
     setNotice(null);
+
     const eNorm = normalizeEmail(email);
 
     try {
       if (mode === 'signin') {
-        const { error } = await supabase.auth.signInWithPassword({ email: eNorm, password });
+        const { error } = await supabase.auth.signInWithPassword({
+          email: eNorm,
+          password,
+        });
+
         if (error) throw error;
       } else {
         const { data, error } = await supabase.auth.signUp({
@@ -125,16 +162,20 @@ export default function Login() {
 
         if (error) {
           const kind = classifyAuthError(error.message);
+
           if (kind === 'already_registered') {
             setMode('signin');
             setNotice('Looks like this email already has an account. Please sign in below.');
             return;
           }
+
           throw error;
         }
 
         if (!data.session) {
-          setNotice('Account created. Please check your email to confirm before logging in.');
+          setNotice(
+            'Check your email for a confirmation link. If it does not arrive, try resending confirmation or logging in.'
+          );
         } else {
           setNotice('Account created and signed in.');
         }
@@ -150,18 +191,23 @@ export default function Login() {
   async function resendConfirmation() {
     setErr(null);
     setNotice(null);
+
     try {
       const eNorm = normalizeEmail(email);
+
       if (!eNorm) {
         setErr('Enter your email above, then click Resend.');
         return;
       }
+
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email: eNorm,
         options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
       });
+
       if (error) throw error;
+
       setNotice('Confirmation email resent. Please check your inbox.');
     } catch (e) {
       setErr(friendlyError(e?.message));
@@ -176,17 +222,21 @@ export default function Login() {
       setNotice(null);
 
       const eNorm = normalizeEmail(email);
+
       if (!eNorm) {
         setErr('Enter your email above to receive a magic link.');
         return;
       }
+
       localStorage.setItem('oauthNext', nextPath);
 
       const { error } = await supabase.auth.signInWithOtp({
         email: eNorm,
         options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
       });
+
       if (error) throw error;
+
       setNotice('Magic link sent! Check your email.');
     } catch (e) {
       setErr(friendlyError(e?.message));
@@ -212,9 +262,9 @@ export default function Login() {
             skipBrowserRedirect: true,
           },
         });
+
         if (error) throw error;
 
-        // attempt to open the OAuth URL in a new tab (often exits to Safari/Chrome)
         const a = document.createElement('a');
         a.href = data?.url || `${window.location.origin}/login`;
         a.target = '_blank';
@@ -223,16 +273,15 @@ export default function Login() {
         a.click();
         document.body.removeChild(a);
 
-        // If we didn’t leave this view, give a tiny, unobtrusive hint
         setTimeout(() => {
           if (document.visibilityState === 'visible') {
             setNotice('Open this page in your browser (Safari/Chrome) to continue with Google.');
           }
         }, 1200);
+
         return;
       }
 
-      // Normal browsers
       const { error: err2 } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -240,6 +289,7 @@ export default function Login() {
           queryParams: { prompt: 'select_account' },
         },
       });
+
       if (err2) throw err2;
     } catch (e) {
       setErr(friendlyError(e?.message));
@@ -251,14 +301,19 @@ export default function Login() {
   /* ---------------- UI ---------------- */
 
   const canSubmit = email.trim() && password.length >= 6 && !loading;
+
   const showContextPanel =
-    (notice && notice.toLowerCase().includes('already has an account')) ||
+    (notice &&
+      (
+        notice.toLowerCase().includes('already has an account') ||
+        notice.toLowerCase().includes('check your email') ||
+        notice.toLowerCase().includes('confirm')
+      )) ||
     (err && err.toLowerCase().includes('confirm your email'));
 
   return (
     <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
       <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
-        {/* --- OAuth block --- */}
         <button
           type="button"
           className="button"
@@ -274,7 +329,6 @@ export default function Login() {
           Continue with Google
         </button>
 
-        {/* Show Magic Link only when in an in-app browser */}
         {inApp && (
           <button
             type="button"
@@ -293,7 +347,6 @@ export default function Login() {
           <small>or use email</small>
         </div>
 
-        {/* --- Email/password form --- */}
         <label htmlFor="email">Email</label>
         <input
           id="email"
@@ -306,7 +359,9 @@ export default function Login() {
           required
         />
 
-        <label htmlFor="pw" style={{ marginTop: 8 }}>Password</label>
+        <label htmlFor="pw" style={{ marginTop: 8 }}>
+          Password
+        </label>
         <div className="row" style={{ gap: 8 }}>
           <input
             id="pw"
@@ -323,22 +378,38 @@ export default function Login() {
             type="button"
             className="button ghost"
             aria-pressed={showPw}
-            onClick={() => setShowPw(s => !s)}
+            onClick={() => setShowPw((s) => !s)}
             title={showPw ? 'Hide password' : 'Show password'}
           >
             {showPw ? 'Hide' : 'Show'}
           </button>
         </div>
 
-        {err && <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">{err}</p>}
-        {notice && <p style={{ color: 'seagreen', marginTop: 8 }} aria-live="polite">{notice}</p>}
+        {err && (
+          <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">
+            {err}
+          </p>
+        )}
 
-        {/* Contextual help actions */}
+        {notice && (
+          <p style={{ color: 'seagreen', marginTop: 8 }} aria-live="polite">
+            {notice}
+          </p>
+        )}
+
         {showContextPanel && (
           <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="button" onClick={() => setMode('signin')}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setMode('signin');
+                setErr(null);
+              }}
+            >
               Go to sign in
             </button>
+
             <button
               type="button"
               className="button ghost"
@@ -348,12 +419,13 @@ export default function Login() {
                   setNotice('Password reset email sent. Check your inbox.');
                   setErr(null);
                 } catch (e) {
-                  setErr(friendlyError(e.message));
+                  setErr(friendlyError(e?.message));
                 }
               }}
             >
               Forgot password?
             </button>
+
             <button type="button" className="button ghost" onClick={resendConfirmation}>
               Resend confirmation
             </button>
@@ -364,6 +436,7 @@ export default function Login() {
           <button className="button primary" type="submit" disabled={!canSubmit}>
             {loading ? 'Please wait…' : mode === 'signin' ? 'Log in' : 'Sign up'}
           </button>
+
           <button
             type="button"
             className="button ghost"
@@ -372,6 +445,7 @@ export default function Login() {
               setMode(nextMode);
               setErr(null);
               setNotice(null);
+
               const url = new URL(window.location.href);
               url.searchParams.set('mode', nextMode);
               window.history.replaceState({}, '', url.toString());
