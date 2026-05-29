@@ -335,6 +335,21 @@ export default function Community() {
   )}
 </section>
 
+<section
+  className="card"
+  style={{
+    padding: 14,
+    marginBottom: 16,
+    background: 'rgba(255,255,255,.7)'
+  }}
+>
+  <strong>Community note:</strong>{' '}
+  <span style={{ color: 'var(--muted)' }}>
+    This gallery is for encouragement, inspiration, and respectful sharing. Please only
+    post images you have permission to share.
+  </span>
+</section>
+
       {/* States */}
       {loading ? (
         <p>Loading…</p>
