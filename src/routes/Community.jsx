@@ -275,14 +275,27 @@ export default function Community() {
   const canLoadMore = !endReached;
 
   return (
-    <PageLayout title="Community" subtitle="Recent public shares & before/after results">
+    <PageLayout
+  title="Community Gallery"
+  subtitle="Public before-and-after transformations, shared for inspiration."
+>
+
+<section className="card" style={{ padding: 16, marginBottom: 16 }}>
+  <h2 style={{ marginTop: 0 }}>Real progress, shared with care</h2>
+  <p style={{ marginBottom: 0, color: 'var(--muted)' }}>
+    Browse public transformations from the Before & After Vault community. These posts
+    may include projects, makeovers, personal progress, home updates, beauty results,
+    creative work, and other meaningful before-and-after moments.
+  </p>
+</section>
+
       {/* Search */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="input"
-          placeholder="Search captions…"
+          placeholder="Search transformations, projects, makeovers…"
           aria-label="Search captions"
           style={{ flex: 1 }}
         />
@@ -296,17 +309,31 @@ export default function Community() {
       </div>
 
       {/* Uploader: only for signed-in users */}
-      <section className="card" style={{ padding: 12, marginBottom: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Share Your Results</h2>
-        {user ? (
-          <BeforeAfterUploader onCreated={() => fetchBatch({ reset: true })} />
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span>Please sign in to post a Before + After.</span>
-            <Link to="/login" className="button">Sign in</Link>
-          </div>
-        )}
-      </section>
+      <section className="card" style={{ padding: 16, marginBottom: 16 }}>
+  <h2 style={{ marginTop: 0 }}>Share a Before & After</h2>
+  <p style={{ color: 'var(--muted)', marginTop: -4 }}>
+    Upload a transformation, progress photo, makeover, project, or result. You control
+    what you choose to share publicly.
+  </p>
+
+  {user ? (
+    <BeforeAfterUploader onCreated={() => fetchBatch({ reset: true })} />
+  ) : (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginTop: 12
+      }}
+    >
+      <span>Please sign in to post a Before + After.</span>
+      <Link to="/login" className="button">Sign in</Link>
+    </div>
+  )}
+</section>
 
       {/* States */}
       {loading ? (
