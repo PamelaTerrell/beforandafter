@@ -178,11 +178,11 @@ export default function Community() {
     return () => clearTimeout(t);
   }, [q]);
 
-  function applyCommonFilters(qb) {
-    if (appliedQ) qb = qb.ilike('caption', `%${appliedQ}%`);
-    if (cursor) qb = qb.lt('created_at', cursor);
-    return qb;
-  }
+  function applyCommonFilters(qb, { search, pageCursor }) {
+  if (search) qb = qb.ilike('caption', `%${search}%`);
+  if (pageCursor) qb = qb.lt('created_at', pageCursor);
+  return qb;
+}
 
   async function fetchBatch({ reset = false } = {}) {
     try {
@@ -195,6 +195,9 @@ export default function Community() {
         setLoadingMore(true);
       }
 
+      const search = appliedQ;
+      const pageCursor = reset ? null : cursor;
+
       // SHARES
       let sharesQ = supabase
         .from('shares')
@@ -204,7 +207,7 @@ export default function Community() {
         .eq('is_public', true)
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
-      sharesQ = applyCommonFilters(sharesQ);
+      sharesQ = applyCommonFilters(sharesQ, { search, pageCursor });
 
       const { data: sharesData, error: sharesErr } = await sharesQ;
       if (sharesErr) throw sharesErr;
@@ -217,7 +220,7 @@ export default function Community() {
         .eq('is_public', true) // keep community feed public-only
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
-      pairsQ = applyCommonFilters(pairsQ);
+      pairsQ = applyCommonFilters(pairsQ, { search, pageCursor });
 
       const { data: pairsData, error: pairsErr } = await pairsQ;
       if (pairsErr) throw pairsErr;
