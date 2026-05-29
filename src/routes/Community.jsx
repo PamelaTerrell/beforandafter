@@ -1,5 +1,5 @@
 // src/routes/Community.jsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
@@ -21,12 +21,13 @@ function isSafeUrl(u) {
 }
 
 function publicUrl(bucket, path) {
+  if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl || null;
 }
 
 // A tiny image component that tries public URL, then signed URL.
-// It renders nothing unless an image successfully loads (so badges don’t float).
+// It renders nothing unless an image successfully loads, so badges do not float.
 function LabeledImage({
   bucket,
   path,
@@ -52,21 +53,24 @@ function LabeledImage({
         return;
       }
 
-      // Fallback: signed URL (7 days)
+      // Fallback: signed URL for 7 days
       try {
         const { data, error } = await supabase
           .storage
           .from(bucket)
           .createSignedUrl(path, 60 * 60 * 24 * 7);
+
         if (!cancelled && !error && data?.signedUrl) {
           setSrc(data.signedUrl);
         }
       } catch {
-        /* ignore; onError below will log when it fails to load */
+        // Ignore here; onError below handles failed loads.
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [bucket, path]);
 
   if (!src) return null;
@@ -81,23 +85,26 @@ function LabeledImage({
           height,
           objectFit: 'cover',
           borderTopLeftRadius: roundLeft ? 10 : 0,
-          borderTopRightRadius: roundRight ? 10 : 0
+          borderTopRightRadius: roundRight ? 10 : 0,
         }}
         loading="lazy"
         decoding="async"
         onError={async () => {
-          // One more attempt: force a fresh signed URL if the public URL 404’d
+          // One more attempt: force a fresh signed URL if the public URL failed.
           if (triedSigned) {
             console.warn('[Community] image failed permanently:', { bucket, path, src });
             setSrc(null);
             return;
           }
+
           setTriedSigned(true);
+
           try {
             const { data, error } = await supabase
               .storage
               .from(bucket)
               .createSignedUrl(path, 60 * 60 * 24 * 7);
+
             if (!error && data?.signedUrl) {
               const bust = (data.signedUrl.includes('?') ? '&' : '?') + 'rb=' + Date.now();
               setSrc(data.signedUrl + bust);
@@ -111,6 +118,7 @@ function LabeledImage({
           }
         }}
       />
+
       <span
         style={{
           position: 'absolute',
@@ -120,7 +128,7 @@ function LabeledImage({
           color: '#fff',
           padding: '2px 8px',
           borderRadius: 999,
-          fontSize: 12
+          fontSize: 12,
         }}
       >
         {label}
@@ -144,45 +152,49 @@ function mapShareRow(row) {
     images: [
       {
         src: publicUrl(COMMUNITY_BUCKET, row.media_path),
-        alt: row.caption || 'Community share'
-      }
-    ]
+        alt: row.caption || 'Community share',
+      },
+    ],
   };
 }
 
 // ---------------- page ----------------
 export default function Community() {
-  const [items, setItems] = useState([]);       // unified list (singles + pairs)
+  const [items, setItems] = useState([]);       // unified list: singles + pairs
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [cursor, setCursor] = useState(null);   // ISO string of the smallest created_at in current list
   const [endReached, setEndReached] = useState(false);
+  const [user, setUser] = useState(null);
 
   // Auth state for gating the uploader
-  const [user, setUser] = useState(null);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_e, session) => {
       setUser(session?.user ?? null);
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
-  // debounce search
+  // Debounce search
   useEffect(() => {
     const t = setTimeout(() => setAppliedQ(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
 
   function applyCommonFilters(qb, { search, pageCursor }) {
-  if (search) qb = qb.ilike('caption', `%${search}%`);
-  if (pageCursor) qb = qb.lt('created_at', pageCursor);
-  return qb;
-}
+    if (search) qb = qb.ilike('caption', `%${search}%`);
+    if (pageCursor) qb = qb.lt('created_at', pageCursor);
+    return qb;
+  }
 
   async function fetchBatch({ reset = false } = {}) {
     try {
@@ -202,24 +214,27 @@ export default function Community() {
       let sharesQ = supabase
         .from('shares')
         .select(
-          'id, caption, media_path, slug, created_at, attribution_name, attribution_url, show_attribution',
+          'id, caption, media_path, slug, created_at, attribution_name, attribution_url, show_attribution'
         )
         .eq('is_public', true)
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
+
       sharesQ = applyCommonFilters(sharesQ, { search, pageCursor });
 
       const { data: sharesData, error: sharesErr } = await sharesQ;
       if (sharesErr) throw sharesErr;
+
       const mappedShares = (sharesData || []).map(mapShareRow);
 
       // BEFORE/AFTER PAIRS
       let pairsQ = supabase
         .from('before_after_pairs')
         .select('id, caption, before_path, after_path, created_at, is_public')
-        .eq('is_public', true) // keep community feed public-only
+        .eq('is_public', true)
         .order('created_at', { ascending: false })
         .limit(PER_TABLE_LIMIT);
+
       pairsQ = applyCommonFilters(pairsQ, { search, pageCursor });
 
       const { data: pairsData, error: pairsErr } = await pairsQ;
@@ -245,21 +260,30 @@ export default function Community() {
       const nextCursor =
         pageSlice.length > 0
           ? pageSlice.reduce(
-              (min, it) => (new Date(it.created_at) < new Date(min) ? it.created_at : min),
+              (min, it) =>
+                new Date(it.created_at) < new Date(min) ? it.created_at : min,
               pageSlice[0].created_at
             )
           : cursor;
 
       const exhausted =
-        (mappedShares.length === 0 && mappedPairs.length === 0) || pageSlice.length === 0;
+        (mappedShares.length === 0 && mappedPairs.length === 0) ||
+        pageSlice.length === 0;
 
-      if (reset) setItems(pageSlice);
-      else setItems((prev) => [...prev, ...pageSlice]);
+      if (reset) {
+        setItems(pageSlice);
+      } else {
+        setItems((prev) => [...prev, ...pageSlice]);
+      }
 
       setCursor(nextCursor);
-      if (exhausted) setEndReached(true);
+
+      if (exhausted) {
+        setEndReached(true);
+      }
     } catch (err) {
-      console.error(err);
+      console.error('[Community] fetchBatch error:', err);
+
       if (reset) {
         setItems([]);
         setEndReached(true);
@@ -279,32 +303,43 @@ export default function Community() {
 
   return (
     <PageLayout
-  title="Community Gallery"
-  subtitle="Public before-and-after transformations, shared for inspiration."
->
-
-<section className="card" style={{ padding: 16, marginBottom: 16 }}>
-  <h2 style={{ marginTop: 0 }}>Real progress, shared with care</h2>
-  <p style={{ marginBottom: 0, color: 'var(--muted)' }}>
-    Browse public transformations from the Before & After Vault community. These posts
-    may include projects, makeovers, personal progress, home updates, beauty results,
-    creative work, and other meaningful before-and-after moments.
-  </p>
-</section>
+      title="Community Gallery"
+      subtitle="Public before-and-after transformations, shared for inspiration."
+    >
+      {/* Intro */}
+      <section className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Real progress, shared with care</h2>
+        <p style={{ marginBottom: 0, color: 'var(--muted)' }}>
+          Browse public transformations from the Before & After Vault community. These
+          posts may include projects, makeovers, personal progress, home updates, beauty
+          results, creative work, and other meaningful before-and-after moments.
+        </p>
+      </section>
 
       {/* Search */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          marginBottom: 12,
+        }}
+      >
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="input"
           placeholder="Search transformations, projects, makeovers…"
-          aria-label="Search captions"
+          aria-label="Search community transformations"
           style={{ flex: 1 }}
         />
+
         <button
           className="button ghost"
-          onClick={() => { setQ(''); setAppliedQ(''); }}
+          onClick={() => {
+            setQ('');
+            setAppliedQ('');
+          }}
           disabled={!q}
         >
           Clear
@@ -313,65 +348,74 @@ export default function Community() {
 
       {/* Uploader: only for signed-in users */}
       <section className="card" style={{ padding: 16, marginBottom: 16 }}>
-  <h2 style={{ marginTop: 0 }}>Share a Before & After</h2>
-  <p style={{ color: 'var(--muted)', marginTop: -4 }}>
-    Upload a transformation, progress photo, makeover, project, or result. You control
-    what you choose to share publicly.
-  </p>
+        <h2 style={{ marginTop: 0 }}>Share a Before & After</h2>
+        <p style={{ color: 'var(--muted)', marginTop: -4 }}>
+          Upload a transformation, progress photo, makeover, project, or result. You
+          control what you choose to share publicly.
+        </p>
 
-  {user ? (
-    <BeforeAfterUploader onCreated={() => fetchBatch({ reset: true })} />
-  ) : (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginTop: 12
-      }}
-    >
-      <span>Please sign in to post a Before + After.</span>
-      <Link to="/login" className="button">Sign in</Link>
-    </div>
-  )}
-</section>
+        {user ? (
+          <BeforeAfterUploader onCreated={() => fetchBatch({ reset: true })} />
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginTop: 12,
+            }}
+          >
+            <span>Please sign in to post a Before + After.</span>
+            <Link to="/login" className="button">
+              Sign in
+            </Link>
+          </div>
+        )}
+      </section>
 
-<section
-  className="card"
-  style={{
-    padding: 14,
-    marginBottom: 16,
-    background: 'rgba(255,255,255,.7)'
-  }}
->
-  <strong>Community note:</strong>{' '}
-  <span style={{ color: 'var(--muted)' }}>
-    This gallery is for encouragement, inspiration, and respectful sharing. Please only
-    post images you have permission to share.
-  </span>
-</section>
+      {/* Community note */}
+      <section
+        className="card"
+        style={{
+          padding: 14,
+          marginBottom: 16,
+          background: 'rgba(255,255,255,.7)',
+        }}
+      >
+        <strong>Community note:</strong>{' '}
+        <span style={{ color: 'var(--muted)' }}>
+          This gallery is for encouragement, inspiration, and respectful sharing. Please
+          only post images you have permission to share.
+        </span>
+      </section>
 
       {/* States */}
       {loading ? (
-        <p>Loading…</p>
+        <div className="card" style={{ padding: 20, textAlign: 'center' }}>
+          <p style={{ margin: 0, color: 'var(--muted)' }}>
+            Loading community posts…
+          </p>
+        </div>
       ) : items.length === 0 ? (
         <div className="card" style={{ padding: 20, textAlign: 'center' }}>
-  <h2 style={{ marginTop: 0 }}>
-    {appliedQ ? 'No matching posts yet' : 'No public transformations yet'}
-  </h2>
-  <p style={{ color: 'var(--muted)' }}>
-    {appliedQ
-      ? `No public posts matched “${appliedQ}.” Try a different search term.`
-      : 'Be the first to share a before-and-after moment with the community.'}
-  </p>
-  {!appliedQ && (
-    <Link to="/projects" className="button primary">
-      Start a project
-    </Link>
-  )}
-</div>
+          <h2 style={{ marginTop: 0 }}>
+            {appliedQ ? 'No matching posts yet' : 'No public transformations yet'}
+          </h2>
+
+          <p style={{ color: 'var(--muted)' }}>
+            {appliedQ
+              ? `No public posts matched “${appliedQ}.” Try a different search term.`
+              : 'Be the first to share a before-and-after moment with the community.'}
+          </p>
+
+          {!appliedQ && (
+            <Link to="/projects" className="button primary">
+              Start a project
+            </Link>
+          )}
+        </div>
       ) : (
         <>
           {/* Grid */}
@@ -380,16 +424,18 @@ export default function Community() {
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-              gap: 16
+              gap: 16,
             }}
           >
             {items.map((it) => {
               if (it.type === 'single') {
                 const showAttribution =
                   !!it.show_attribution &&
-                  (!!it.attribution_name || (it.attribution_url && isSafeUrl(it.attribution_url)));
+                  (!!it.attribution_name ||
+                    (it.attribution_url && isSafeUrl(it.attribution_url)));
 
                 const img = it.images[0];
+
                 const cardContent = (
                   <>
                     {img?.src && (
@@ -401,21 +447,33 @@ export default function Community() {
                           height: 180,
                           objectFit: 'cover',
                           borderTopLeftRadius: 10,
-                          borderTopRightRadius: 10
+                          borderTopRightRadius: 10,
                         }}
                         loading="lazy"
                         decoding="async"
-                        onError={(e) => { e.currentTarget.src = ''; }}
+                        onError={(e) => {
+                          e.currentTarget.src = '';
+                        }}
                       />
                     )}
+
                     <div style={{ padding: 12 }}>
                       <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
+
                       <small style={{ color: '#666' }}>
                         {new Date(it.created_at).toLocaleString()}
                       </small>
+
                       {showAttribution && (
-                        <small style={{ display: 'block', marginTop: 6, color: 'var(--muted)' }}>
+                        <small
+                          style={{
+                            display: 'block',
+                            marginTop: 6,
+                            color: 'var(--muted)',
+                          }}
+                        >
                           by <strong>{it.attribution_name || 'Anonymous'}</strong>
+
                           {it.attribution_url && isSafeUrl(it.attribution_url) && (
                             <>
                               {' · '}
@@ -438,7 +496,10 @@ export default function Community() {
                 return (
                   <article className="card" key={it.key}>
                     {it.slug ? (
-                      <Link to={`/s/${it.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      <Link
+                        to={`/s/${it.slug}`}
+                        style={{ textDecoration: 'none', color: 'inherit' }}
+                      >
                         {cardContent}
                       </Link>
                     ) : (
@@ -448,11 +509,14 @@ export default function Community() {
                 );
               }
 
-              // Pair card (side-by-side) — clickable to /p/:id
+              // Pair card: side-by-side, clickable to /p/:id
               if (it.type === 'pair') {
                 return (
                   <article className="card" key={it.key}>
-                    <Link to={`/p/${it.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                    <Link
+                      to={`/p/${it.id}`}
+                      style={{ textDecoration: 'none', color: 'inherit' }}
+                    >
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
                         <LabeledImage
                           bucket={MEDIA_BUCKET}
@@ -462,6 +526,7 @@ export default function Community() {
                           roundLeft
                           height={180}
                         />
+
                         <LabeledImage
                           bucket={MEDIA_BUCKET}
                           path={it.after_path}
@@ -474,6 +539,7 @@ export default function Community() {
 
                       <div style={{ padding: 12 }}>
                         <h3 style={{ margin: 0, fontSize: 16 }}>{it.caption}</h3>
+
                         <small style={{ color: '#666' }}>
                           {new Date(it.created_at).toLocaleString()}
                         </small>
@@ -488,7 +554,13 @@ export default function Community() {
           </div>
 
           {/* Load more */}
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              marginTop: 16,
+            }}
+          >
             {canLoadMore && (
               <button
                 className="button"
