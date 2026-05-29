@@ -444,7 +444,8 @@ export default function Community() {
           ...prev,
           [postKey]: {
             ...(prev[postKey] || emptyReactionCounts()),
-            [reactionType]: ((prev[postKey] || emptyReactionCounts())[reactionType] || 0) + 1,
+            [reactionType]:
+              ((prev[postKey] || emptyReactionCounts())[reactionType] || 0) + 1,
           },
         }));
       }
@@ -477,42 +478,60 @@ export default function Community() {
     return (
       <div
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
           marginTop: 12,
           paddingTop: 10,
           borderTop: '1px solid rgba(0,0,0,.08)',
         }}
       >
-        {REACTION_OPTIONS.map((reaction) => {
-          const isActive = !!mine[reaction.type];
-          const actionKey = `${postKey}:${reaction.type}`;
-          const isWorking = reactingKey === actionKey;
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: 'var(--muted)',
+            marginBottom: 8,
+            textTransform: 'uppercase',
+            letterSpacing: '.04em',
+          }}
+        >
+          React with encouragement
+        </div>
 
-          return (
-            <button
-              key={reaction.type}
-              type="button"
-              className={isActive ? 'button primary' : 'button ghost'}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleReaction(item, reaction.type);
-              }}
-              disabled={isWorking}
-              title={user ? reaction.label : 'Sign in to react'}
-              style={{
-                fontSize: 13,
-                padding: '6px 10px',
-                borderRadius: 999,
-              }}
-            >
-              <span aria-hidden="true">{reaction.emoji}</span>{' '}
-              <span>{counts[reaction.type] || 0}</span>
-            </button>
-          );
-        })}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          {REACTION_OPTIONS.map((reaction) => {
+            const isActive = !!mine[reaction.type];
+            const actionKey = `${postKey}:${reaction.type}`;
+            const isWorking = reactingKey === actionKey;
+
+            return (
+              <button
+                key={reaction.type}
+                type="button"
+                className={isActive ? 'button primary' : 'button ghost'}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleReaction(item, reaction.type);
+                }}
+                disabled={isWorking}
+                title={user ? reaction.label : 'Sign in to react'}
+                style={{
+                  fontSize: 13,
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                }}
+              >
+                <span aria-hidden="true">{reaction.emoji}</span>{' '}
+                <span>{counts[reaction.type] || 0}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     );
   }
