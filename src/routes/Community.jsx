@@ -1,6 +1,6 @@
 // src/routes/Community.jsx
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
 import BeforeAfterUploader from './BeforeAfterUploader';
@@ -9,6 +9,12 @@ const COMMUNITY_BUCKET = 'community'; // for single-image shares
 const MEDIA_BUCKET = 'media';         // for before/after pairs
 const PAGE_SIZE = 24;
 const PER_TABLE_LIMIT = 24;
+
+const REACTION_OPTIONS = [
+  { type: 'inspiring', label: 'Inspiring', emoji: '👏' },
+  { type: 'progress', label: 'Great progress', emoji: '✨' },
+  { type: 'love', label: 'Love this', emoji: '❤️' },
+];
 
 // ---------------- helpers ----------------
 function isSafeUrl(u) {
@@ -24,6 +30,18 @@ function publicUrl(bucket, path) {
   if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl || null;
+}
+
+function getPostKey(postType, postId) {
+  return `${postType}:${String(postId)}`;
+}
+
+function emptyReactionCounts() {
+  return {
+    inspiring: 0,
+    progress: 0,
+    love: 0,
+  };
 }
 
 // A tiny image component that tries public URL, then signed URL.
@@ -160,6 +178,8 @@ function mapShareRow(row) {
 
 // ---------------- page ----------------
 export default function Community() {
+  const navigate = useNavigate();
+
   const [items, setItems] = useState([]);       // unified list: singles + pairs
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -169,7 +189,11 @@ export default function Community() {
   const [endReached, setEndReached] = useState(false);
   const [user, setUser] = useState(null);
 
-  // Auth state for gating the uploader
+  const [reactionCounts, setReactionCounts] = useState({});
+  const [myReactions, setMyReactions] = useState({});
+  const [reactingKey, setReactingKey] = useState(null);
+
+  // Auth state for gating the uploader and reactions
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
@@ -196,6 +220,60 @@ export default function Community() {
     return qb;
   }
 
+  async function loadReactionsForItems(nextItems) {
+    if (!nextItems.length) return;
+
+    const postIds = [...new Set(nextItems.map((it) => String(it.id)))];
+    const postTypes = [...new Set(nextItems.map((it) => it.type))];
+
+    const { data, error } = await supabase
+      .from('community_reactions')
+      .select('post_type, post_id, reaction_type, user_id')
+      .in('post_type', postTypes)
+      .in('post_id', postIds);
+
+    if (error) {
+      console.error('[Community] reactions load error:', error);
+      return;
+    }
+
+    const nextCounts = {};
+    const nextMine = {};
+
+    nextItems.forEach((it) => {
+      const key = getPostKey(it.type, it.id);
+      nextCounts[key] = emptyReactionCounts();
+      nextMine[key] = {};
+    });
+
+    (data || []).forEach((row) => {
+      const key = getPostKey(row.post_type, row.post_id);
+
+      if (!nextCounts[key]) {
+        nextCounts[key] = emptyReactionCounts();
+      }
+
+      if (row.reaction_type in nextCounts[key]) {
+        nextCounts[key][row.reaction_type] += 1;
+      }
+
+      if (user?.id && row.user_id === user.id) {
+        if (!nextMine[key]) nextMine[key] = {};
+        nextMine[key][row.reaction_type] = true;
+      }
+    });
+
+    setReactionCounts((prev) => ({
+      ...prev,
+      ...nextCounts,
+    }));
+
+    setMyReactions((prev) => ({
+      ...prev,
+      ...nextMine,
+    }));
+  }
+
   async function fetchBatch({ reset = false } = {}) {
     try {
       if (reset) {
@@ -203,6 +281,8 @@ export default function Community() {
         setItems([]);
         setCursor(null);
         setEndReached(false);
+        setReactionCounts({});
+        setMyReactions({});
       } else {
         setLoadingMore(true);
       }
@@ -281,6 +361,8 @@ export default function Community() {
       if (exhausted) {
         setEndReached(true);
       }
+
+      await loadReactionsForItems(pageSlice);
     } catch (err) {
       console.error('[Community] fetchBatch error:', err);
 
@@ -294,12 +376,146 @@ export default function Community() {
     }
   }
 
+  async function toggleReaction(item, reactionType) {
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
+    const postType = item.type;
+    const postId = String(item.id);
+    const postKey = getPostKey(postType, postId);
+    const actionKey = `${postKey}:${reactionType}`;
+    const alreadyReacted = !!myReactions[postKey]?.[reactionType];
+
+    try {
+      setReactingKey(actionKey);
+
+      if (alreadyReacted) {
+        const { error } = await supabase
+          .from('community_reactions')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('post_type', postType)
+          .eq('post_id', postId)
+          .eq('reaction_type', reactionType);
+
+        if (error) throw error;
+
+        setMyReactions((prev) => ({
+          ...prev,
+          [postKey]: {
+            ...(prev[postKey] || {}),
+            [reactionType]: false,
+          },
+        }));
+
+        setReactionCounts((prev) => ({
+          ...prev,
+          [postKey]: {
+            ...(prev[postKey] || emptyReactionCounts()),
+            [reactionType]: Math.max(
+              ((prev[postKey] || emptyReactionCounts())[reactionType] || 0) - 1,
+              0
+            ),
+          },
+        }));
+      } else {
+        const { error } = await supabase
+          .from('community_reactions')
+          .insert({
+            user_id: user.id,
+            post_type: postType,
+            post_id: postId,
+            reaction_type: reactionType,
+          });
+
+        if (error) throw error;
+
+        setMyReactions((prev) => ({
+          ...prev,
+          [postKey]: {
+            ...(prev[postKey] || {}),
+            [reactionType]: true,
+          },
+        }));
+
+        setReactionCounts((prev) => ({
+          ...prev,
+          [postKey]: {
+            ...(prev[postKey] || emptyReactionCounts()),
+            [reactionType]: ((prev[postKey] || emptyReactionCounts())[reactionType] || 0) + 1,
+          },
+        }));
+      }
+    } catch (err) {
+      console.error('[Community] reaction toggle error:', err);
+    } finally {
+      setReactingKey(null);
+    }
+  }
+
   useEffect(() => {
     fetchBatch({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedQ]);
 
+  useEffect(() => {
+    if (items.length > 0) {
+      loadReactionsForItems(items);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
   const canLoadMore = !endReached;
+
+  function ReactionBar({ item }) {
+    const postKey = getPostKey(item.type, item.id);
+    const counts = reactionCounts[postKey] || emptyReactionCounts();
+    const mine = myReactions[postKey] || {};
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          marginTop: 12,
+          paddingTop: 10,
+          borderTop: '1px solid rgba(0,0,0,.08)',
+        }}
+      >
+        {REACTION_OPTIONS.map((reaction) => {
+          const isActive = !!mine[reaction.type];
+          const actionKey = `${postKey}:${reaction.type}`;
+          const isWorking = reactingKey === actionKey;
+
+          return (
+            <button
+              key={reaction.type}
+              type="button"
+              className={isActive ? 'button primary' : 'button ghost'}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleReaction(item, reaction.type);
+              }}
+              disabled={isWorking}
+              title={user ? reaction.label : 'Sign in to react'}
+              style={{
+                fontSize: 13,
+                padding: '6px 10px',
+                borderRadius: 999,
+              }}
+            >
+              <span aria-hidden="true">{reaction.emoji}</span>{' '}
+              <span>{counts[reaction.type] || 0}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <PageLayout
@@ -489,6 +705,8 @@ export default function Community() {
                           )}
                         </small>
                       )}
+
+                      <ReactionBar item={it} />
                     </div>
                   </>
                 );
@@ -543,6 +761,8 @@ export default function Community() {
                         <small style={{ color: '#666' }}>
                           {new Date(it.created_at).toLocaleString()}
                         </small>
+
+                        <ReactionBar item={it} />
                       </div>
                     </Link>
                   </article>
