@@ -354,7 +354,21 @@ export default function Community() {
       {loading ? (
         <p>Loading…</p>
       ) : items.length === 0 ? (
-        <p>No public posts {appliedQ ? `matching “${appliedQ}”` : 'yet'}.</p>
+        <div className="card" style={{ padding: 20, textAlign: 'center' }}>
+  <h2 style={{ marginTop: 0 }}>
+    {appliedQ ? 'No matching posts yet' : 'No public transformations yet'}
+  </h2>
+  <p style={{ color: 'var(--muted)' }}>
+    {appliedQ
+      ? `No public posts matched “${appliedQ}.” Try a different search term.`
+      : 'Be the first to share a before-and-after moment with the community.'}
+  </p>
+  {!appliedQ && (
+    <Link to="/projects" className="button primary">
+      Start a project
+    </Link>
+  )}
+</div>
       ) : (
         <>
           {/* Grid */}
