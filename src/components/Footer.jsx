@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 export default function Footer() {
   const year = new Date().getFullYear();
   return (
@@ -14,6 +16,7 @@ export default function Footer() {
           </a>
           . © {year} Before &amp; After Vault
         </p>
+        <Link to="/privacy">Privacy &amp; sharing</Link>
       </div>
     </footer>
   );

@@ -26,6 +26,7 @@ function Destination() {
     <div>
       Destination: {location.pathname}
       {location.state?.authNotice ? ` (${location.state.authNotice})` : ''}
+      {location.state?.authError ? ` (${location.state.authError})` : ''}
     </div>
   );
 }
@@ -127,5 +128,14 @@ describe('AuthCallback', () => {
         'Destination: /login (Email confirmed. You can now sign in.)'
       )
     ).not.toBeNull();
+  });
+
+  it('does not display an untrusted callback error description', async () => {
+    capture({ search: '?error_description=Click%20this%20untrusted%20link' });
+
+    renderCallback();
+
+    expect(await screen.findByText(/Destination: \/login \(We could not complete sign-in/)).not.toBeNull();
+    expect(screen.queryByText(/Click this untrusted link/)).toBeNull();
   });
 });

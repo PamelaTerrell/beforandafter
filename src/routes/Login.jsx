@@ -36,7 +36,9 @@ export default function Login() {
     if (m.includes('invalid login')) return 'Invalid email or password.';
     if (m.includes('already exists')) return 'An account with this email already exists.';
     if (m.includes('rate limit')) return 'Too many attempts. Please wait and try again.';
-    return message;
+    if (m.includes('email not confirmed')) return 'Please confirm your email before signing in.';
+    if (m.includes('network') || m.includes('fetch')) return 'We could not reach the sign-in service. Please try again.';
+    return 'We could not complete that request. Please try again.';
   }
 
   async function sendPasswordReset(targetEmail) {
@@ -53,7 +55,7 @@ export default function Login() {
   /* ---------------- Effects ---------------- */
 
   useEffect(() => {
-    const errorMsg = state?.authError || qs.get('error');
+    const errorMsg = state?.authError;
     const successMsg = state?.authNotice;
 
     if (errorMsg) {
@@ -110,14 +112,18 @@ export default function Login() {
         });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email: eNorm,
           password,
         });
 
         if (error) throw error;
 
-        setNotice('Account created. You are now signed in.');
+        setNotice(
+          data.session
+            ? 'Account created. Your private vault is ready.'
+            : 'Account created. Check your email to confirm your address.'
+        );
       }
     } catch (e) {
       setErr(friendlyError(e.message));
@@ -178,13 +184,32 @@ export default function Login() {
     }
   }
 
+  async function requestPasswordReset() {
+    try {
+      setLoading(true);
+      setErr(null);
+      setNotice(null);
+      await sendPasswordReset(email);
+      setNotice('Password reset email sent.');
+    } catch (e) {
+      setErr(friendlyError(e.message));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   /* ---------------- UI ---------------- */
 
   const canSubmit = email && password.length >= 6 && !loading;
 
   return (
-    <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'}>
-      <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+    <PageLayout title={mode === 'signin' ? 'Log in' : 'Create account'} noIndex>
+      <form onSubmit={handleSubmit} className="card auth-card" aria-busy={loading}>
+        <p className="auth-intro">
+          {mode === 'signin'
+            ? 'Welcome back. Sign in to continue to your private vault.'
+            : 'Create your private vault. You choose what is ever shared publicly.'}
+        </p>
 
         <button
           type="button"
@@ -196,77 +221,72 @@ export default function Login() {
           Continue with Google
         </button>
 
-        {inApp && (
-          <button
-            type="button"
-            className="button ghost"
-            onClick={loginWithMagicLink}
-            disabled={loading}
-            style={{ width: '100%', marginTop: 8 }}
-          >
-            Email me a sign-in link
-          </button>
-        )}
-
-        <div style={{ textAlign: 'center', margin: '12px 0', color: '#888' }}>
-          <small>or use email</small>
+        <div className="auth-divider">
+          <span>{mode === 'signin' ? 'or sign in with email' : 'or create an account with email'}</span>
         </div>
 
-        <label>Email</label>
-        <input
-          className="input"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-
-        <label style={{ marginTop: 8 }}>Password</label>
-        <div className="row">
+        <div className="field">
+          <label htmlFor="email">Email</label>
           <input
+            id="email"
+            className="input"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+
+        <div className="field-label-row">
+          <label htmlFor="password">Password</label>
+          {mode === 'signin' && (
+            <button type="button" className="button linklike" onClick={requestPasswordReset} disabled={loading}>
+              Forgot password?
+            </button>
+          )}
+        </div>
+        <div className="password-field">
+          <input
+            id="password"
             className="input"
             type={showPw ? 'text' : 'password'}
+            autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            style={{ flex: 1 }}
+            minLength={6}
           />
-          <button type="button" onClick={() => setShowPw(s => !s)}>
+          <button className="button ghost" type="button" onClick={() => setShowPw(s => !s)} aria-controls="password" aria-pressed={showPw}>
             {showPw ? 'Hide' : 'Show'}
           </button>
         </div>
 
-        {err && <p style={{ color: 'crimson' }}>{err}</p>}
-        {notice && <p style={{ color: 'seagreen' }}>{notice}</p>}
+        {err && <p className="status-message error" role="alert">{err}</p>}
+        {notice && <p className="status-message success" role="status">{notice}</p>}
 
-        <div style={{ marginTop: 10 }}>
+        <button className="button primary auth-submit" disabled={!canSubmit}>
+          {loading ? 'Please wait…' : mode === 'signin' ? 'Log in' : 'Create account'}
+        </button>
+
+        {mode === 'signin' && (
+          <>
+            <div className="auth-divider"><span>or use a passwordless link</span></div>
+            <button type="button" className="button ghost" onClick={loginWithMagicLink} disabled={loading}>
+              Email me a sign-in link
+            </button>
+            {inApp && <small>Sign-in links work especially well inside social media browsers.</small>}
+          </>
+        )}
+
+        <div className="auth-switch">
+          <span>{mode === 'signin' ? 'New to Before & After Vault?' : 'Already have an account?'}</span>
           <button
             type="button"
-            className="button ghost"
-            onClick={async () => {
-              try {
-                await sendPasswordReset(email);
-                setNotice('Password reset email sent.');
-              } catch (e) {
-                setErr(friendlyError(e.message));
-              }
-            }}
-          >
-            Forgot password?
-          </button>
-        </div>
-
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="button primary" disabled={!canSubmit}>
-            {loading ? 'Please wait…' : mode === 'signin' ? 'Log in' : 'Sign up'}
-          </button>
-
-          <button
-            type="button"
-            className="button ghost"
+            className="button linklike"
             onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
           >
-            {mode === 'signin' ? 'Create account' : 'Have an account? Log in'}
+            {mode === 'signin' ? 'Create account' : 'Log in'}
           </button>
         </div>
 

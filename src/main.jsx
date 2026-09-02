@@ -12,6 +12,8 @@ import MyShares from './routes/MyShares.jsx';
 import PairPage from './routes/PairPage.jsx';
 import AuthCallback from './routes/AuthCallback.jsx';
 import ResetPassword from './routes/ResetPassword.jsx';
+import NotFound from './routes/NotFound.jsx';
+import Privacy from './routes/Privacy.jsx';
 import RouterRoot from './components/RouterRoot.jsx';
 import { captureAuthCallbackParameters } from './lib/authRouting.js';
 
@@ -33,7 +35,8 @@ const router = createBrowserRouter([
       { path: '/p/:id', element: <PairPage /> },
       { path: '/my-shares', element: <MyShares /> },
       { path: '/reset-password', element: <ResetPassword /> },
-      { path: '*', element: <App /> },
+      { path: '/privacy', element: <Privacy /> },
+      { path: '*', element: <NotFound /> },
     ],
   },
 ]);

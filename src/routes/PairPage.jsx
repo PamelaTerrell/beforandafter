@@ -1,11 +1,12 @@
 // src/routes/PairPage.jsx
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Helmet } from 'react-helmet';
 import { supabase } from '../lib/supabase';
+import PageLayout from '../components/PageLayout';
 
 const COMMUNITY_BUCKET = 'community'; // public
 const MEDIA_BUCKET = 'media';         // private
+const SIGNED_URL_TTL = 10 * 60;
 
 // Public URL helper (always returns a URL string; may 404 if object missing)
 function publicUrl(bucket, path) {
@@ -13,14 +14,14 @@ function publicUrl(bucket, path) {
   return data?.publicUrl || null;
 }
 
-// Create a 7-day signed URL from the private bucket (works when viewer is authorized)
+// Short-lived fallback for older public pairs that have no public copy.
 async function resolvePrivateUrl(path) {
   if (!path) return null;
   try {
     const { data, error } = await supabase
       .storage
       .from(MEDIA_BUCKET)
-      .createSignedUrl(path, 60 * 60 * 24 * 7);
+      .createSignedUrl(path, SIGNED_URL_TTL);
     if (!error) return data?.signedUrl || null;
   } catch {
     /* ignore */
@@ -60,8 +61,7 @@ export default function PairPage() {
     const { data, error } = await supabase
       .from('before_after_pairs')
       .select('id, user_id, caption, before_path, after_path, created_at, is_public')
-      // If you later want public-only, uncomment:
-      // .eq('is_public', true)
+      .eq('is_public', true)
       .eq('id', numericId)
       .single();
 
@@ -101,7 +101,8 @@ export default function PairPage() {
   }, [load]);
 
   const pageUrl = `${window.location.origin}/p/${idParam}`;
-  const ogImage = afterUrl || beforeUrl || undefined;
+  // Never place an expiring signed URL in share metadata.
+  const ogImage = pair ? publicUrl(COMMUNITY_BUCKET, `pairs/${pair.id}/after.jpg`) : undefined;
 
   async function copyLink() {
     try { await navigator.clipboard.writeText(pageUrl); alert('Link copied!'); }
@@ -110,49 +111,30 @@ export default function PairPage() {
 
   if (loading) {
     return (
-      <>
-        <Helmet><title>Loading… · Before & After Vault</title></Helmet>
-        <p style={{ padding: 16 }}>Loading…</p>
-      </>
+      <PageLayout title="Loading…" noIndex>
+        <p className="loading-state" role="status">Loading public transformation…</p>
+      </PageLayout>
     );
   }
 
   if (notFound) {
     return (
-      <div style={{ maxWidth: 860, margin: '40px auto', padding: 16 }}>
-        <Helmet>
-          <title>Post not found · Before & After Vault</title>
-          <meta name="robots" content="noindex" />
-        </Helmet>
-        <Link to="/" className="button ghost">← Home</Link>
-        <h1 style={{ marginTop: 16 }}>Post not found</h1>
-        <p style={{ marginTop: 8 }}>
-          The link you followed may be broken or the post is no longer public.
-        </p>
-      </div>
+      <PageLayout title="Post not found" noIndex>
+        <div className="empty-state">
+          <h2>This transformation is no longer available</h2>
+          <p>The link may be broken, or its owner may have made the post private.</p>
+          <Link to="/community" className="button primary">Browse Community</Link>
+        </div>
+      </PageLayout>
     );
   }
 
   return (
-    <div style={{ maxWidth: 860, margin: '40px auto', padding: 16 }}>
-      <Helmet>
-        <title>{pair?.caption ? `${pair.caption} · Before & After Vault` : 'Before & After · Vault'}</title>
-        <meta name="description" content={pair?.caption || 'A before-and-after transformation.'} />
-        <link rel="canonical" href={pageUrl} />
-        <meta property="og:type" content="article" />
-        <meta property="og:title" content={pair?.caption || 'Before & After'} />
-        <meta property="og:description" content={pair?.caption || 'A before-and-after transformation.'} />
-        {ogImage && <meta property="og:image" content={ogImage} />}
-        <meta property="og:url" content={pageUrl} />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={pair?.caption || 'Before & After'} />
-        <meta name="twitter:description" content={pair?.caption || 'A before-and-after transformation.'} />
-        {ogImage && <meta name="twitter:image" content={ogImage} />}
-      </Helmet>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+    <PageLayout title={pair?.caption || 'Before & After'} description={pair?.caption || 'A before-and-after transformation.'} canonical={pageUrl} ogImage={ogImage} ogType="article" noHeader>
+      <article className="public-share-page public-share-page--wide">
+      <div className="share-toolbar">
         <Link to="/" className="button ghost">← Home</Link>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="share-toolbar__actions">
           {beforeUrl && <a className="button ghost" href={beforeUrl} target="_blank" rel="noopener noreferrer">Open Before</a>}
           {afterUrl && <a className="button ghost" href={afterUrl} target="_blank" rel="noopener noreferrer">Open After</a>}
           <button className="button ghost" onClick={copyLink}>Copy link</button>
@@ -161,7 +143,7 @@ export default function PairPage() {
 
       <h1 style={{ marginTop: 16 }}>Before &amp; After</h1>
 
-      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', marginTop: 12 }}>
+      <div className="pair-comparison">
         {beforeUrl && (
           <figure style={{ margin: 0, position: 'relative' }}>
             <img
@@ -198,15 +180,11 @@ export default function PairPage() {
 
       {pair?.caption && <p style={{ marginTop: 12, fontSize: 18 }}>{pair.caption}</p>}
 
-      <small style={{ color: '#666' }}>
+      <small>
         Posted on {new Date(pair.created_at).toLocaleString()}
       </small>
 
-      <style>{`
-        @media (max-width: 720px) {
-          .grid { grid-template-columns: 1fr !important; }
-        }
-      `}</style>
-    </div>
+      </article>
+    </PageLayout>
   );
 }

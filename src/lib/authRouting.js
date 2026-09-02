@@ -1,4 +1,6 @@
 export const DEFAULT_POST_AUTH_PATH = '/projects';
+export const SAFE_AUTH_ERROR_MESSAGE =
+  'We could not complete sign-in. Please try again or request a new link.';
 
 const AUTH_PARAMETER_NAMES = new Set([
   'access_token',

@@ -7,6 +7,7 @@ import {
   clearCapturedAuthCallbackParameters,
   getCapturedAuthCallbackParameters,
   getSafeRedirect,
+  SAFE_AUTH_ERROR_MESSAGE,
 } from '../lib/authRouting';
 
 export default function AuthCallback() {
@@ -27,7 +28,7 @@ export default function AuthCallback() {
 
       if (rawErr) {
         if (!mounted) return;
-        nav('/login', { replace: true, state: { authError: rawErr } });
+        nav('/login', { replace: true, state: { authError: SAFE_AUTH_ERROR_MESSAGE } });
         return;
       }
 
@@ -46,11 +47,11 @@ export default function AuthCallback() {
           });
           if (error) throw error;
         }
-      } catch (e) {
+      } catch {
         if (!mounted) return;
         nav('/login', {
           replace: true,
-          state: { authError: e?.message || 'Could not complete sign-in.' },
+          state: { authError: SAFE_AUTH_ERROR_MESSAGE },
         });
         return;
       }
@@ -99,7 +100,7 @@ export default function AuthCallback() {
   }, [nav]);
 
   return (
-    <PageLayout title="Connecting…">
+    <PageLayout title="Connecting…" noIndex>
       <div className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
         <p aria-live="polite">Finishing sign-in…</p>
       </div>

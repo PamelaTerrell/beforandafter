@@ -7,6 +7,7 @@ import BeforeAfterUploader from './BeforeAfterUploader';
 
 const COMMUNITY_BUCKET = 'community'; // for single-image shares
 const MEDIA_BUCKET = 'media';         // for before/after pairs
+const SIGNED_URL_TTL = 10 * 60;
 const PAGE_SIZE = 24;
 const PER_TABLE_LIMIT = 24;
 
@@ -20,7 +21,7 @@ const REACTION_OPTIONS = [
 function isSafeUrl(u) {
   try {
     const url = new URL(u, window.location.origin);
-    return ['http:', 'https:', 'mailto:'].includes(url.protocol);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol) && !url.username && !url.password;
   } catch {
     return false;
   }
@@ -71,12 +72,12 @@ function LabeledImage({
         return;
       }
 
-      // Fallback: signed URL for 7 days
+      // Short-lived fallback for public pairs stored in the private media bucket.
       try {
         const { data, error } = await supabase
           .storage
           .from(bucket)
-          .createSignedUrl(path, 60 * 60 * 24 * 7);
+          .createSignedUrl(path, SIGNED_URL_TTL);
 
         if (!cancelled && !error && data?.signedUrl) {
           setSrc(data.signedUrl);
@@ -110,7 +111,7 @@ function LabeledImage({
         onError={async () => {
           // One more attempt: force a fresh signed URL if the public URL failed.
           if (triedSigned) {
-            console.warn('[Community] image failed permanently:', { bucket, path, src });
+            console.warn('[Community] image could not be loaded.');
             setSrc(null);
             return;
           }
@@ -121,17 +122,17 @@ function LabeledImage({
             const { data, error } = await supabase
               .storage
               .from(bucket)
-              .createSignedUrl(path, 60 * 60 * 24 * 7);
+              .createSignedUrl(path, SIGNED_URL_TTL);
 
             if (!error && data?.signedUrl) {
               const bust = (data.signedUrl.includes('?') ? '&' : '?') + 'rb=' + Date.now();
               setSrc(data.signedUrl + bust);
             } else {
-              console.warn('[Community] signed URL generation failed:', { bucket, path, error });
+              console.warn('[Community] signed URL generation failed:', error?.message || 'Unknown error');
               setSrc(null);
             }
           } catch (e) {
-            console.warn('[Community] signed URL error:', { bucket, path, e });
+            console.warn('[Community] signed URL error:', e?.message || 'Unknown error');
             setSrc(null);
           }
         }}
@@ -226,9 +227,9 @@ export default function Community() {
     const postIds = [...new Set(nextItems.map((it) => String(it.id)))];
     const postTypes = [...new Set(nextItems.map((it) => it.type))];
 
-    const { data, error } = await supabase
+    const { data: countRows, error } = await supabase
       .from('community_reactions')
-      .select('post_type, post_id, reaction_type, user_id')
+      .select('post_type, post_id, reaction_type')
       .in('post_type', postTypes)
       .in('post_id', postIds);
 
@@ -246,7 +247,7 @@ export default function Community() {
       nextMine[key] = {};
     });
 
-    (data || []).forEach((row) => {
+    (countRows || []).forEach((row) => {
       const key = getPostKey(row.post_type, row.post_id);
 
       if (!nextCounts[key]) {
@@ -257,11 +258,24 @@ export default function Community() {
         nextCounts[key][row.reaction_type] += 1;
       }
 
-      if (user?.id && row.user_id === user.id) {
-        if (!nextMine[key]) nextMine[key] = {};
-        nextMine[key][row.reaction_type] = true;
-      }
     });
+
+    if (user?.id) {
+      const { data: mine, error: mineError } = await supabase
+        .from('community_reactions')
+        .select('post_type, post_id, reaction_type')
+        .eq('user_id', user.id)
+        .in('post_type', postTypes)
+        .in('post_id', postIds);
+
+      if (!mineError) {
+        (mine || []).forEach((row) => {
+          const key = getPostKey(row.post_type, row.post_id);
+          if (!nextMine[key]) nextMine[key] = {};
+          nextMine[key][row.reaction_type] = true;
+        });
+      }
+    }
 
     setReactionCounts((prev) => ({
       ...prev,

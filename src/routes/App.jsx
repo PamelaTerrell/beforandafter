@@ -7,7 +7,7 @@ import PageLayout from '../components/PageLayout';
 const COMMUNITY_BUCKET = 'community'; // single-image shares (public)
 const MEDIA_BUCKET = 'media';         // before/after pairs (private)
 const HOMEPAGE_LIMIT = 8;
-const SIGNED_URL_TTL = 60 * 60 * 24 * 7; // 7 days
+const SIGNED_URL_TTL = 10 * 60;
 
 /* ---------- URL helpers ---------- */
 
@@ -73,7 +73,7 @@ function mapPairRow(row) {
 }
 
 export default function App() {
-  const [email, setEmail] = useState(null);
+  const [signedIn, setSignedIn] = useState(false);
   const [items, setItems] = useState([]); // mixed list (singles + pairs)
   const [loading, setLoading] = useState(true);
 
@@ -87,10 +87,10 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
-      if (mounted) setEmail(data.session?.user?.email ?? null);
+      if (mounted) setSignedIn(Boolean(data.session));
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      setEmail(session?.user?.email ?? null);
+      setSignedIn(Boolean(session));
     });
     return () => {
       mounted = false;
@@ -178,15 +178,32 @@ export default function App() {
   return (
     <PageLayout
       title="Before & After Vault"
-      subtitle="Track private before-and-after transformations."
+      description="Keep your transformations private, organized, and easy to share only when you choose."
+      noHeader
     >
-      {email && <small>Signed in as {email}</small>}
+      <section className="hero fade-up">
+        <div className="hero__content">
+          <span className="eyebrow">Your progress, kept with care</span>
+          <h1>See how far you’ve come.</h1>
+          <p>Keep before-and-after moments organized in your private vault, then share only the transformations you choose.</p>
+          <div className="hero__actions">
+            <Link to="/projects" className="button primary">{signedIn ? 'Open your vault' : 'Start your first project'}</Link>
+            <Link to="/community" className="button ghost">Explore Community</Link>
+          </div>
+          <p className="privacy-promise"><span aria-hidden="true">●</span> Private by default. Sharing is always your choice.</p>
+        </div>
+      </section>
 
       {/* Static showcase */}
-      <section className="stack ba-gallery">
+      <section className="stack ba-gallery" aria-labelledby="possibilities-title">
+        <div className="section-heading">
+          <span className="eyebrow">Every kind of transformation</span>
+          <h2 id="possibilities-title">Make progress visible</h2>
+          <p>From spaces and creative work to personal milestones, your vault keeps the full story together.</p>
+        </div>
         <div className="grid grid--cards">
           {gallery.map((item) => (
-            <figure className="card ba-card" key={item.src}>
+            <figure className="card ba-card gallery-card" key={item.src}>
               <div className="ba-media">
                 <img
                   src={item.src}

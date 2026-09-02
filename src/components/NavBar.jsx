@@ -1,11 +1,12 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 export default function NavBar() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef(null);
   const nav = useNavigate();
   const location = useLocation();
 
@@ -34,6 +35,18 @@ export default function NavBar() {
     return () => document.body.classList.remove('no-scroll');
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') {
+        setMenuOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    }
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [menuOpen]);
+
   async function handleSignOut() {
     const { error } = await supabase.auth.signOut();
     if (error) return alert(error.message || 'Sign-out failed');
@@ -49,10 +62,6 @@ export default function NavBar() {
   function onBackdropClick(e) {
     // close if clicking the dim backdrop
     if (e.target === e.currentTarget) setMenuOpen(false);
-  }
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') setMenuOpen(false);
   }
 
   return (
@@ -86,7 +95,7 @@ export default function NavBar() {
             <div className="nav-desktop">
               {session ? (
                 <>
-                  <span className="nav-email">{session.user.email}</span>
+                  <span className="nav-account" aria-label="Signed in">Your vault</span>
                   <button className="button ghost" onClick={handleSignOut}>Sign out</button>
                 </>
               ) : (
@@ -97,8 +106,9 @@ export default function NavBar() {
 
           {/* Mobile toggle */}
           <button
+            ref={menuButtonRef}
             className="menu-toggle"
-            aria-label="Menu"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
             aria-controls="mobile-nav"
             aria-expanded={menuOpen ? 'true' : 'false'}
             onClick={() => setMenuOpen(v => !v)}
@@ -121,8 +131,9 @@ export default function NavBar() {
         className={'mobile-nav' + (menuOpen ? ' open' : '')}
         role="dialog"
         aria-modal="true"
+        aria-label="Site navigation"
+        hidden={!menuOpen}
         onClick={onBackdropClick}
-        onKeyDown={onKeyDown}
       >
         <div className="mobile-nav__panel" role="document" onClick={(e) => e.stopPropagation()}>
           <nav className="mobile-nav__links">
@@ -149,7 +160,7 @@ export default function NavBar() {
 
           {session && (
             <div className="mobile-nav__footer">
-              <div className="mobile-nav__email">{session.user.email}</div>
+              <div className="mobile-nav__email">Signed in</div>
               <button className="button ghost" onClick={handleSignOut}>Sign out</button>
             </div>
           )}

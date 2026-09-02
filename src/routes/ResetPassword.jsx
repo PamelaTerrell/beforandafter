@@ -23,8 +23,9 @@ export default function ResetPassword() {
       if (!mounted) return;
 
       if (!data?.session) {
-        nav('/login?error=Your password reset link is invalid or has expired.', {
+        nav('/login', {
           replace: true,
+          state: { authError: 'Your password reset link is invalid or has expired.' },
         });
         return;
       }
@@ -85,8 +86,8 @@ export default function ResetPassword() {
 
   if (checkingSession) {
     return (
-      <PageLayout title="Reset password">
-        <div className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+      <PageLayout title="Reset password" noIndex>
+        <div className="card auth-card">
           <p aria-live="polite">Checking your reset link…</p>
         </div>
       </PageLayout>
@@ -94,14 +95,14 @@ export default function ResetPassword() {
   }
 
   return (
-    <PageLayout title="Reset password">
-      <form onSubmit={handleSubmit} className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+    <PageLayout title="Reset password" noIndex>
+      <form onSubmit={handleSubmit} className="card auth-card" aria-busy={loading}>
         <p style={{ marginTop: 0 }}>
           Enter your new password below.
         </p>
 
         <label htmlFor="new-password">New password</label>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="password-field">
           <input
             id="new-password"
             className="input"
@@ -111,11 +112,12 @@ export default function ResetPassword() {
             onChange={(e) => setPassword(e.target.value)}
             required
             minLength={6}
-            style={{ flex: 1 }}
           />
           <button
             type="button"
             className="button ghost"
+            aria-controls="new-password"
+            aria-pressed={showPw}
             onClick={() => setShowPw((s) => !s)}
           >
             {showPw ? 'Hide' : 'Show'}

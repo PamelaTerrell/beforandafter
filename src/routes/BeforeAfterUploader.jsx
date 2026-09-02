@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { validateImageFile } from "../lib/mediaValidation";
 
 const MEDIA_BUCKET = "media";
 
@@ -96,8 +97,21 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
   function surfaceError(msg) {
     setError(msg);
     setUiState("error");
-    try { alert(msg); } catch {}
-    console.error("[BA] ", msg);
+  }
+
+  function selectImage(file, setter) {
+    if (!file) {
+      setter(null);
+      return;
+    }
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      surfaceError(validationError);
+      setter(null);
+      return;
+    }
+    setError("");
+    setter(file);
   }
 
   const handleSubmit = async (e) => {
@@ -111,6 +125,7 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
       return surfaceError("Please select both Before and After images.");
     }
 
+    const uploadedPaths = [];
     try {
       setLoading(true);
 
@@ -138,12 +153,14 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         upsert: false, contentType: preferredMime
       });
       if (up1.error) throw up1.error;
+      uploadedPaths.push(beforePath);
       setProgress(65);
 
       const up2 = await supabase.storage.from(MEDIA_BUCKET).upload(afterPath, afterBlob, {
         upsert: false, contentType: preferredMime
       });
       if (up2.error) throw up2.error;
+      uploadedPaths.push(afterPath);
       setProgress(85);
 
       // 4) insert DB row (with user_id to satisfy RLS)
@@ -163,6 +180,7 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         .single();
 
       if (insErr) throw insErr;
+      uploadedPaths.length = 0;
 
       setProgress(100);
       setUiState("done");
@@ -178,7 +196,9 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
       // tiny timeout helps avoid any UI race
       setTimeout(() => navigate(`/p/${data.id}`), 120);
     } catch (err) {
-      console.error("[BA] ERROR", err);
+      if (uploadedPaths.length) {
+        await supabase.storage.from(MEDIA_BUCKET).remove(uploadedPaths);
+      }
       surfaceError(err?.message || "Upload failed");
     } finally {
       setLoading(false);
@@ -189,7 +209,8 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
 
   return (
     <form onSubmit={handleSubmit} className="ba-uploader">
-      <small style={{ color: "#6b7280" }}>status: {uiState}</small>
+      <p className="privacy-note"><strong>Public post:</strong> both images and the caption will be visible in Community.</p>
+      <span className="visually-hidden" role="status" aria-live="polite">{uiState === 'uploading' ? `Uploading, ${progress}% complete` : uiState}</span>
 
       {error && (
         <div className="error-banner" role="alert">{error}</div>
@@ -200,22 +221,24 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
           <span>Before image</span>
           <input
             type="file"
-            accept="image/*"
-            onChange={(e) => { setBeforeFile(e.target.files?.[0] || null); setError(""); }}
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(e) => selectImage(e.target.files?.[0] || null, setBeforeFile)}
           />
         </label>
         <label className="file">
           <span>After image</span>
           <input
             type="file"
-            accept="image/*"
-            onChange={(e) => { setAfterFile(e.target.files?.[0] || null); setError(""); }}
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(e) => selectImage(e.target.files?.[0] || null, setAfterFile)}
           />
         </label>
       </div>
 
       <div className="caption">
+        <label htmlFor="pair-caption">Caption <span className="optional">optional</span></label>
         <input
+          id="pair-caption"
           type="text"
           placeholder="Add an optional caption"
           value={caption}
@@ -251,9 +274,8 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
           Swap
         </button>
         <button
-          type="button"
+          type="submit"
           className="button"
-          onClick={handleSubmit}
           disabled={loading}
         >
           {loading ? (progress >= 100 ? "Finishing…" : `Uploading… ${progress}%`) : "Post Before + After"}
@@ -279,7 +301,8 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         .ba-uploader { display: grid; gap: 12px; }
         .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .file { display: grid; gap: 6px; }
-        .caption input { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #ccc; }
+        .caption { display: grid; gap: 6px; }
+        .caption input { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--border); }
         .preview { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); align-items: start; }
         .side { position: relative; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; background: #fafafa; min-height: 120px; }
         .side img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -288,8 +311,7 @@ export default function BeforeAfterUploader({ communityId = null, onCreated }) {
         .error-banner { background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B; padding: 8px 10px; border-radius: 10px; }
         .success { color: #065f46; display: flex; align-items: center; gap: 8px; }
         .hint { color: #6b7280; }
-        button { padding: 10px 14px; border-radius: 10px; border: none; background: #111827; color: #fff; cursor: pointer; }
-        .button.ghost, .button.ghost:where(button) { background: transparent; border: 1px solid #d1d5db; color: #111827; }
+        .privacy-note { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--text); }
         @media (max-width: 720px) {
           .row { grid-template-columns: 1fr; }
           .preview { grid-template-columns: 1fr 1fr; }

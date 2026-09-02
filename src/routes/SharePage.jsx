@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Helmet } from 'react-helmet';
 import { supabase } from '../lib/supabase';
+import PageLayout from '../components/PageLayout';
 
 const COMMUNITY_BUCKET = 'community';
 
@@ -9,7 +9,7 @@ const COMMUNITY_BUCKET = 'community';
 function isSafeUrl(u) {
   try {
     const url = new URL(u, window.location.origin);
-    return ['http:', 'https:', 'mailto:'].includes(url.protocol);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol) && !url.username && !url.password;
   } catch {
     return false;
   }
@@ -63,28 +63,21 @@ export default function SharePage() {
 
   if (loading) {
     return (
-      <>
-        <Helmet>
-          <title>Loading… · Before & After Vault</title>
-        </Helmet>
-        <p style={{ padding: 16 }}>Loading…</p>
-      </>
+      <PageLayout title="Loading…" noIndex>
+        <p className="loading-state" role="status">Loading public share…</p>
+      </PageLayout>
     );
   }
 
   if (notFound) {
     return (
-      <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-        <Helmet>
-          <title>Share not found · Before & After Vault</title>
-          <meta name="robots" content="noindex" />
-        </Helmet>
-        <Link to="/" className="button ghost">← Home</Link>
-        <h1 style={{ marginTop: 16 }}>Share not found</h1>
-        <p style={{ marginTop: 8 }}>
-          The link you followed may be broken or the share is no longer public.
-        </p>
-      </div>
+      <PageLayout title="Share not found" noIndex>
+        <div className="empty-state">
+          <h2>This share is no longer available</h2>
+          <p>The link may be broken, or its owner may have made the share private.</p>
+          <Link to="/community" className="button primary">Browse Community</Link>
+        </div>
+      </PageLayout>
     );
   }
 
@@ -102,28 +95,9 @@ export default function SharePage() {
     (!!share?.attribution_name || (share?.attribution_url && isSafeUrl(share.attribution_url)));
 
   return (
-    <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-      {/* Social/meta tags */}
-      <Helmet>
-        <title>
-          {share?.caption ? `${share.caption} · Before & After Vault` : 'Community Share · Before & After Vault'}
-        </title>
-        <meta name="description" content={share?.caption || 'A community before-and-after share.'} />
-        <link rel="canonical" href={pageUrl} />
-
-        <meta property="og:type" content="article" />
-        <meta property="og:title" content={share?.caption || 'Community Share'} />
-        <meta property="og:description" content={share?.caption || 'A community before-and-after share.'} />
-        {imgUrl && <meta property="og:image" content={imgUrl} />}
-        <meta property="og:url" content={pageUrl} />
-
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={share?.caption || 'Community Share'} />
-        <meta name="twitter:description" content={share?.caption || 'A community before-and-after share.'} />
-        {imgUrl && <meta name="twitter:image" content={imgUrl} />}
-      </Helmet>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+    <PageLayout title={share?.caption || 'Community Share'} description={share?.caption || 'A community before-and-after share.'} canonical={pageUrl} ogImage={imgUrl} ogType="article" noHeader>
+      <article className="public-share-page">
+      <div className="share-toolbar">
         <Link to="/" className="button ghost">← Home</Link>
         <button className="button ghost" onClick={copyLink}>Copy link</button>
       </div>
@@ -160,9 +134,10 @@ export default function SharePage() {
         </p>
       )}
 
-      <small style={{ color: '#666' }}>
+      <small>
         Shared on {new Date(share.created_at).toLocaleString()}
       </small>
-    </div>
+      </article>
+    </PageLayout>
   );
 }

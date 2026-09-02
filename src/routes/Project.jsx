@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import Guard from '../components/Guard';
 import PageLayout from '../components/PageLayout';
 import { supabase } from '../lib/supabase';
+import { validateImageFile } from '../lib/mediaValidation';
 
 const MEDIA_BUCKET = 'media';         // private bucket (already set up)
 const COMMUNITY_BUCKET = 'community'; // public bucket (you created)
@@ -13,7 +14,7 @@ function toSlug(s) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  const rand = Math.random().toString(36).slice(2, 7); // short random suffix
+  const rand = crypto.randomUUID().replaceAll('-', '').slice(0, 10);
   return `${base}-${rand}`;
 }
 
@@ -22,11 +23,19 @@ function normalizeContact(input) {
   const s = (input || '').trim();
   if (!s) return null;
 
-  // already a URL or mailto
-  if (/^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
+  if (/^mailto:/i.test(s)) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.slice(7)) ? s : null;
+  }
 
-  // //domain
-  if (/^\/\//i.test(s)) return `https:${s}`;
+  if (/^https?:\/\//i.test(s) || /^\/\//i.test(s)) {
+    try {
+      const url = new URL(s.startsWith('//') ? `https:${s}` : s);
+      if (url.username || url.password) return null;
+      return url.href;
+    } catch {
+      return null;
+    }
+  }
 
   // email-like (simple)
   const emailLike = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -60,8 +69,6 @@ async function downscaleImage(
     preferFormat = 'image/webp',
   } = {}
 ) {
-  if (file.size <= targetBytes) return file;
-
   let bitmap = null;
   try {
     if ('createImageBitmap' in window) {
@@ -142,12 +149,25 @@ function ProjectInner() {
   const [deletingId, setDeletingId] = useState(null);
   const [sharingId, setSharingId] = useState(null);
   const [signedUrls, setSignedUrls] = useState({}); // { entryId: url }
+  const [loadState, setLoadState] = useState('loading');
 
   // Load project + entries
   useEffect(() => {
     (async () => {
-      const { data: p } = await supabase.from('projects').select('*').eq('id', id).single();
+      setLoadState('loading');
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) return;
+      const { data: p } = await supabase
+        .from('projects')
+        .select('id, owner_id, title, category, created_at')
+        .eq('id', id)
+        .eq('owner_id', userData.user.id)
+        .maybeSingle();
       setProject(p ?? null);
+      if (!p) {
+        setLoadState('not-found');
+        return;
+      }
 
       const { data: e } = await supabase
         .from('entries')
@@ -155,6 +175,7 @@ function ProjectInner() {
         .eq('project_id', id)
         .order('taken_at', { ascending: true });
       setEntries(e ?? []);
+      setLoadState('ready');
     })();
   }, [id]);
 
@@ -188,13 +209,9 @@ function ProjectInner() {
       setFile(null);
       return;
     }
-    if (!f.type.startsWith('image/')) {
-      setFileErr('Please choose an image file.');
-      setFile(null);
-      return;
-    }
-    if (f.size > 25 * 1024 * 1024) {
-      setFileErr('Image is larger than 25MB. Please pick a smaller file.');
+    const validationError = validateImageFile(f);
+    if (validationError) {
+      setFileErr(validationError);
       setFile(null);
       return;
     }
@@ -210,10 +227,9 @@ function ProjectInner() {
       });
       setFile(small);
       setPreviewUrl(URL.createObjectURL(small));
-    } catch (err) {
-      console.error(err);
-      setFile(f);
-      setPreviewUrl(URL.createObjectURL(f));
+    } catch {
+      setFileErr('We could not process that image. Please choose another JPEG, PNG, or WebP file.');
+      setFile(null);
     }
   }
 
@@ -227,6 +243,7 @@ function ProjectInner() {
   async function addEntry(e) {
     e.preventDefault();
     setUploading(true);
+    let uploadedPath = null;
     try {
       // Upload file if present
       let media_path = null;
@@ -238,6 +255,7 @@ function ProjectInner() {
         const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
         const filename = `${crypto.randomUUID()}.${ext}`;
         media_path = `${userId}/${id}/${filename}`; // userId must be first segment for RLS
+        uploadedPath = media_path;
 
         const { error: upErr } = await supabase
           .storage
@@ -256,6 +274,7 @@ function ProjectInner() {
         .select()
         .single();
       if (error) throw error;
+      uploadedPath = null;
 
       // Refresh UI
       setEntries(prev => [...prev, data]);
@@ -267,6 +286,9 @@ function ProjectInner() {
         setPreviewUrl(null);
       }
     } catch (err) {
+      if (uploadedPath) {
+        await supabase.storage.from(MEDIA_BUCKET).remove([uploadedPath]);
+      }
       alert(err?.message || 'Could not add entry');
       console.error(err);
     } finally {
@@ -280,29 +302,29 @@ function ProjectInner() {
     try {
       setDeletingId(en.id);
 
-      // 1) Delete the file (if any)
-      if (en.media_path) {
-        const { error: rmErr } = await supabase
-          .storage
-          .from(MEDIA_BUCKET)
-          .remove([en.media_path]);
-        if (rmErr) throw rmErr;
-      }
-
-      // 2) Delete the row
-      const { error } = await supabase
+      // Remove the row first so a storage cleanup failure cannot leave a broken entry.
+      const { data: deletedEntry, error } = await supabase
         .from('entries')
         .delete()
-        .eq('id', en.id);
-      if (error) throw error;
+        .eq('id', en.id)
+        .eq('project_id', id)
+        .select('id')
+        .maybeSingle();
+      if (error || !deletedEntry) throw error || new Error('This entry could not be deleted. Refresh and try again.');
 
-      // 3) Update UI
+      let cleanupWarning = false;
+      if (en.media_path) {
+        const { error: rmErr } = await supabase.storage.from(MEDIA_BUCKET).remove([en.media_path]);
+        cleanupWarning = Boolean(rmErr);
+      }
+
       setEntries(prev => prev.filter(x => x.id !== en.id));
       setSignedUrls(prev => {
         const next = { ...prev };
         delete next[en.id];
         return next;
       });
+      if (cleanupWarning) alert('Entry deleted, but its private stored image could not be cleaned up.');
     } catch (err) {
       alert(err?.message || 'Could not delete entry');
       console.error(err);
@@ -312,6 +334,7 @@ function ProjectInner() {
   }
 
   async function shareEntry(en) {
+    let uploadedPublicPath = null;
     try {
       setSharingId(en.id);
 
@@ -351,6 +374,7 @@ function ProjectInner() {
         .from(COMMUNITY_BUCKET)
         .upload(public_path, blob, { contentType: blob.type, upsert: false });
       if (upErr) throw upErr;
+      uploadedPublicPath = public_path;
 
       // 4) Create slug & insert share row (retry once if slug collides)
       const baseForSlug =
@@ -376,6 +400,7 @@ function ProjectInner() {
         ({ error: rowErr } = await insertShare(slug));
       }
       if (rowErr) throw rowErr;
+      uploadedPublicPath = null;
 
       // 5) Build the pretty page URL and copy it
       const pageUrl = `${window.location.origin}/s/${slug}`;
@@ -386,6 +411,9 @@ function ProjectInner() {
         alert(`Shared! Public page:\n${pageUrl}`);
       }
     } catch (e) {
+      if (uploadedPublicPath) {
+        await supabase.storage.from(COMMUNITY_BUCKET).remove([uploadedPublicPath]);
+      }
       console.error(e);
       alert(e?.message || 'Could not share this entry');
     } finally {
@@ -397,23 +425,27 @@ function ProjectInner() {
     <PageLayout
       title={project ? project.title : 'Project'}
       subtitle={project ? project.category : undefined}
+      noIndex
     >
-      {!project ? (
-        <p>Loading…</p>
+      {loadState === 'loading' ? (
+        <p className="loading-state" role="status">Loading project…</p>
+      ) : loadState === 'not-found' ? (
+        <div className="empty-state"><h2>Project not found</h2><p>This project may have been removed, or you may not have access to it.</p></div>
       ) : (
         <>
           <form onSubmit={addEntry} className="card">
             <div className="row">
-              <label>Type</label>
-              <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              <label htmlFor="entry-type">Entry type</label>
+              <select id="entry-type" value={kind} onChange={(e) => setKind(e.target.value)}>
                 <option value="before">Before</option>
                 <option value="update">Update</option>
                 <option value="after">After</option>
               </select>
             </div>
 
-            <label>Note</label>
+            <label htmlFor="entry-note">Note</label>
             <textarea
+              id="entry-note"
               className="input"
               rows={3}
               placeholder="What changed?"
@@ -421,11 +453,12 @@ function ProjectInner() {
               onChange={(e) => setNote(e.target.value)}
             />
 
-            <label style={{ marginTop: 8 }}>Photo (optional)</label>
+            <label htmlFor="entry-photo" style={{ marginTop: 8 }}>Photo (optional)</label>
             <input
+              id="entry-photo"
               className="input"
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
               onChange={onPickFile}
             />
             {fileErr && <p style={{ color: 'crimson', marginTop: 8 }} aria-live="polite">{fileErr}</p>}
