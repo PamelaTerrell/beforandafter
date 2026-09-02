@@ -3,13 +3,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
+import { getSafeRedirect } from '../lib/authRouting';
 
 export default function Login() {
   const nav = useNavigate();
-  const { search } = useLocation();
+  const { search, state } = useLocation();
   const qs = useMemo(() => new URLSearchParams(search), [search]);
 
-  const nextPath = qs.get('next') || '/projects';
+  const nextPath = getSafeRedirect(qs.get('next'));
   const qsMode = qs.get('mode');
   const [mode, setMode] = useState(qsMode === 'signup' ? 'signup' : 'signin');
 
@@ -43,7 +44,7 @@ export default function Login() {
     if (!eNorm) throw new Error('Enter your email above first.');
 
     const { error } = await supabase.auth.resetPasswordForEmail(eNorm, {
-      redirectTo: `${window.location.origin}/auth/callback`,
+      redirectTo: `${window.location.origin}/auth/callback?type=recovery`,
     });
 
     if (error) throw error;
@@ -52,12 +53,17 @@ export default function Login() {
   /* ---------------- Effects ---------------- */
 
   useEffect(() => {
-    const errorMsg = qs.get('error');
+    const errorMsg = state?.authError || qs.get('error');
+    const successMsg = state?.authNotice;
+
     if (errorMsg) {
-      setErr(decodeURIComponent(errorMsg));
-      nav('/login', { replace: true });
+      setErr(errorMsg);
+      nav('/login', { replace: true, state: null });
+    } else if (successMsg) {
+      setNotice(successMsg);
+      nav('/login', { replace: true, state: null });
     }
-  }, [qs, nav]);
+  }, [qs, nav, state]);
 
   useEffect(() => {
     let mounted = true;
@@ -132,6 +138,8 @@ export default function Login() {
         return;
       }
 
+      localStorage.setItem('oauthNext', nextPath);
+
       const { error } = await supabase.auth.signInWithOtp({
         email: eNorm,
         options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
@@ -152,6 +160,8 @@ export default function Login() {
       setLoading(true);
       setErr(null);
       setNotice(null);
+
+      localStorage.setItem('oauthNext', nextPath);
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',

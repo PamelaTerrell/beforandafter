@@ -2,6 +2,12 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import PageLayout from '../components/PageLayout';
+import {
+  captureAuthCallbackParameters,
+  clearCapturedAuthCallbackParameters,
+  getCapturedAuthCallbackParameters,
+  getSafeRedirect,
+} from '../lib/authRouting';
 
 export default function AuthCallback() {
   const nav = useNavigate();
@@ -10,26 +16,20 @@ export default function AuthCallback() {
     let mounted = true;
 
     async function handleAuthCallback() {
-      const url = new URL(window.location.href);
-      const params = url.searchParams;
-      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-
-      const rawErr =
-        params.get('error_description') ||
-        params.get('error') ||
-        hash.get('error_description') ||
-        hash.get('error');
+      const callback =
+        getCapturedAuthCallbackParameters() || captureAuthCallbackParameters();
+      const rawErr = callback?.error;
+      const code = callback?.code;
+      const type = callback?.type;
+      const accessToken = callback?.accessToken;
+      const refreshToken = callback?.refreshToken;
+      clearCapturedAuthCallbackParameters();
 
       if (rawErr) {
         if (!mounted) return;
-        nav(`/login?error=${encodeURIComponent(rawErr)}`, { replace: true });
+        nav('/login', { replace: true, state: { authError: rawErr } });
         return;
       }
-
-      const code = params.get('code');
-      const type = params.get('type') || hash.get('type');
-      const accessToken = hash.get('access_token');
-      const refreshToken = hash.get('refresh_token');
 
       try {
         // PKCE flows: OAuth / some email flows
@@ -48,12 +48,10 @@ export default function AuthCallback() {
         }
       } catch (e) {
         if (!mounted) return;
-        nav(
-          `/login?error=${encodeURIComponent(
-            e?.message || 'Could not complete sign-in.'
-          )}`,
-          { replace: true }
-        );
+        nav('/login', {
+          replace: true,
+          state: { authError: e?.message || 'Could not complete sign-in.' },
+        });
         return;
       }
 
@@ -75,13 +73,16 @@ export default function AuthCallback() {
 
       // Email confirmation flow → send back to login with success message
       if (type === 'signup') {
-        nav('/login?confirmed=1', { replace: true });
+        nav('/login', {
+          replace: true,
+          state: { authNotice: 'Email confirmed. You can now sign in.' },
+        });
         return;
       }
 
       // Normal signed-in success
       if (data?.session) {
-        const next = localStorage.getItem('oauthNext') || '/projects';
+        const next = getSafeRedirect(localStorage.getItem('oauthNext'));
         localStorage.removeItem('oauthNext');
         nav(next, { replace: true });
         return;

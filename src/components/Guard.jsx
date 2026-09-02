@@ -1,23 +1,41 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
 export default function Guard({ children }) {
-  const [ready, setReady] = useState(false);
-  const navigate = useNavigate();
+  const [status, setStatus] = useState('checking');
 
   useEffect(() => {
-    let sub;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) navigate('/login');
-      setReady(true);
-      sub = supabase.auth.onAuthStateChange((_e, session) => {
-        if (!session) navigate('/login');
-      }).data.subscription;
-    })();
-    return () => sub && sub.unsubscribe();
-  }, [navigate]);
+    let active = true;
+    let authEventVersion = 0;
 
-  return ready ? children : <div className="container"><p>Loading…</p></div>;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      authEventVersion += 1;
+      setStatus(session ? 'authorized' : 'unauthorized');
+    });
+
+    const checkVersion = authEventVersion;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active || authEventVersion !== checkVersion) return;
+      setStatus(!error && data?.session ? 'authorized' : 'unauthorized');
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (status === 'checking') {
+    return <div className="container"><p>Loading…</p></div>;
+  }
+
+  if (status === 'unauthorized') {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children;
 }

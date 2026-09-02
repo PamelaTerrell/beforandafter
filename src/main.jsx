@@ -12,23 +12,30 @@ import MyShares from './routes/MyShares.jsx';
 import PairPage from './routes/PairPage.jsx';
 import AuthCallback from './routes/AuthCallback.jsx';
 import ResetPassword from './routes/ResetPassword.jsx';
+import RouterRoot from './components/RouterRoot.jsx';
+import { captureAuthCallbackParameters } from './lib/authRouting.js';
 
 import './index.css';
 
-const router = createBrowserRouter([
-  { path: '/', element: <App /> },
-  { path: '/login', element: <Login /> },
-  { path: '/auth/callback', element: <AuthCallback /> }, // <-- user lands here from email
-  { path: '/projects', element: <Projects /> },
-  { path: '/projects/:id', element: <Project /> },
-  { path: '/community', element: <Community /> },
-  { path: '/s/:slug', element: <SharePage /> },
-  { path: '/p/:id', element: <PairPage /> }, // <-- only once
-  { path: '/my-shares', element: <MyShares /> },
-  { path: '/reset-password', element: <ResetPassword /> },
+captureAuthCallbackParameters();
 
-  // Optional: fallback
-  { path: '*', element: <App /> },
+const router = createBrowserRouter([
+  {
+    element: <RouterRoot />,
+    children: [
+      { path: '/', element: <App /> },
+      { path: '/login', element: <Login /> },
+      { path: '/auth/callback', element: <AuthCallback /> },
+      { path: '/projects', element: <Projects /> },
+      { path: '/projects/:id', element: <Project /> },
+      { path: '/community', element: <Community /> },
+      { path: '/s/:slug', element: <SharePage /> },
+      { path: '/p/:id', element: <PairPage /> },
+      { path: '/my-shares', element: <MyShares /> },
+      { path: '/reset-password', element: <ResetPassword /> },
+      { path: '*', element: <App /> },
+    ],
+  },
 ]);
 
 ReactDOM.createRoot(document.getElementById('root')).render(

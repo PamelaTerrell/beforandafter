@@ -1,5 +1,4 @@
 import NavBar from './NavBar';
-import { Analytics } from '@vercel/analytics/react';
 import Footer from './Footer';
 import { Helmet } from 'react-helmet';
 
@@ -19,7 +18,9 @@ export default function PageLayout({
   const siteUrl =
     typeof window !== 'undefined' ? window.location.origin : 'https://beforeandaftervault.com';
   const pageUrl =
-    typeof window !== 'undefined' ? window.location.href : `${siteUrl}/`;
+    typeof window !== 'undefined'
+      ? `${siteUrl}${window.location.pathname}`
+      : `${siteUrl}/`;
   const defaultOg = `${siteUrl}/og-2.png`; // ← points to /public/og-2.png
 
   return (
@@ -70,7 +71,6 @@ export default function PageLayout({
           </header>
         )}
         {children}
-        <Analytics />
       </main>
       <Footer />
     </>
